@@ -32,7 +32,14 @@ function isValidSubscription(body: unknown): body is PushSubscriptionRecord {
   return typeof keys.p256dh === "string" && typeof keys.auth === "string";
 }
 
-export function createServer({ config, store, webPush, logger }: ServerDeps): Express {
+/**
+ * Public app: everything reachable from Edvard's phone via the
+ * Tailscale-only Ingress (static PWA assets, health checks, subscribe,
+ * reply). Deliberately does NOT include /notify — see createInternalApp.
+ * No app-level auth; the Tailscale/NetworkPolicy network boundary is the
+ * trust boundary, same as everywhere else on this platform.
+ */
+export function createPublicApp({ config, store, logger }: Omit<ServerDeps, "webPush">): Express {
   const app = express();
   app.use(express.json());
   app.use(express.static("public"));
@@ -57,9 +64,6 @@ export function createServer({ config, store, webPush, logger }: ServerDeps): Ex
     res.status(200).json({ publicKey: config.vapidPublicKey });
   });
 
-  // Reachable only via the Tailscale-only Ingress — see _context.md's
-  // Security posture. No app-level auth for the PoC; the network boundary
-  // is the trust boundary, same as everywhere else on this platform.
   app.post("/subscribe", async (req, res) => {
     if (!isValidSubscription(req.body)) {
       res.status(400).json({ error: "invalid subscription" });
@@ -71,8 +75,35 @@ export function createServer({ config, store, webPush, logger }: ServerDeps): Ex
     res.status(201).json({ status: "subscribed" });
   });
 
-  // Cluster-internal only — NOT exposed via Ingress. Mirrors
-  // whatsapp-bridge's /send staying unreachable from outside the cluster.
+  // v1 scope: logged only, not routed anywhere — same "prove the round
+  // trip before building routing" precedent WhatsApp Bridge's inbound
+  // handling set.
+  app.post("/reply", (req, res) => {
+    const { text } = req.body as { text?: unknown };
+    if (typeof text !== "string" || text.length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    repliesReceived.add(1);
+    logger.info({ text }, "reply received");
+    res.status(200).json({ status: "received" });
+  });
+
+  return app;
+}
+
+/**
+ * Internal app: /notify only, on its own port, with no route mounted on
+ * the public app's port at all — the split is what actually enforces
+ * "cluster-internal only," not just an Ingress path that happens not to
+ * route here. NetworkPolicy allows this port only from agents/infra pods,
+ * never from the tailscale namespace. Mirrors whatsapp-bridge's /send
+ * staying unreachable from outside the cluster.
+ */
+export function createInternalApp({ store, webPush, logger }: Omit<ServerDeps, "config">): Express {
+  const app = express();
+  app.use(express.json());
+
   app.post("/notify", async (req, res) => {
     const { persona, text } = req.body as { persona?: unknown; text?: unknown };
     if (typeof text !== "string" || text.length === 0) {
@@ -94,21 +125,6 @@ export function createServer({ config, store, webPush, logger }: ServerDeps): Ex
       logger.error({ err }, "push send failed");
       res.status(502).json({ error: "push send failed" });
     }
-  });
-
-  // Reachable only via the Tailscale-only Ingress, same as /subscribe.
-  // v1 scope: logged only, not routed anywhere — same "prove the round
-  // trip before building routing" precedent WhatsApp Bridge's inbound
-  // handling set.
-  app.post("/reply", (req, res) => {
-    const { text } = req.body as { text?: unknown };
-    if (typeof text !== "string" || text.length === 0) {
-      res.status(400).json({ error: "text is required" });
-      return;
-    }
-    repliesReceived.add(1);
-    logger.info({ text }, "reply received");
-    res.status(200).json({ status: "received" });
   });
 
   return app;
