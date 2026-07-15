@@ -15,5 +15,5 @@ COPY --from=builder /app/dist/ dist/
 COPY public/ public/
 
 USER node
-EXPOSE 8080 9464
+EXPOSE 8080 8081 9464
 CMD ["node", "dist/index.js"]

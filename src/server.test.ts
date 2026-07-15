@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import pino from "pino";
 import type { Express } from "express";
-import { createServer, type WebPushSender } from "./server.js";
+import { createPublicApp, createInternalApp, type WebPushSender } from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
@@ -17,6 +17,7 @@ const validSubscription: PushSubscriptionRecord = {
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     port: 8080,
+    internalPort: 8081,
     dataDir: "/tmp/unused",
     vapidPublicKey: "test-public-key",
     vapidPrivateKey: "test-private-key",
@@ -25,17 +26,15 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-describe("agora server", () => {
+describe("agora public app", () => {
   let app: Express;
   let store: SubscriptionStore;
-  let webPush: WebPushSender;
   let dir: string;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-server-test-"));
     store = new SubscriptionStore(dir);
-    webPush = { sendNotification: vi.fn().mockResolvedValue(undefined) };
-    app = createServer({ config: makeConfig(), store, webPush, logger: pino({ enabled: false }) });
+    app = createPublicApp({ config: makeConfig(), store, logger: pino({ enabled: false }) });
   });
 
   it("GET /healthz always returns 200", async () => {
@@ -49,10 +48,9 @@ describe("agora server", () => {
   });
 
   it("GET /health returns 503 when VAPID is not configured", async () => {
-    const unconfigured = createServer({
+    const unconfigured = createPublicApp({
       config: makeConfig({ vapidPublicKey: undefined, vapidPrivateKey: undefined }),
       store,
-      webPush,
       logger: pino({ enabled: false }),
     });
     const res = await request(unconfigured).get("/health");
@@ -74,6 +72,35 @@ describe("agora server", () => {
     const res = await request(app).post("/subscribe").send(validSubscription);
     expect(res.status).toBe(201);
     expect(await store.load()).toEqual(validSubscription);
+  });
+
+  it("POST /reply logs and returns 200", async () => {
+    const res = await request(app).post("/reply").send({ text: "sounds good" });
+    expect(res.status).toBe(200);
+  });
+
+  it("POST /reply rejects a missing text field", async () => {
+    const res = await request(app).post("/reply").send({});
+    expect(res.status).toBe(400);
+  });
+
+  it("does not mount /notify at all — that's the internal app's job", async () => {
+    const res = await request(app).post("/notify").send({ text: "hi" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("agora internal app", () => {
+  let app: Express;
+  let store: SubscriptionStore;
+  let webPush: WebPushSender;
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-internal-test-"));
+    store = new SubscriptionStore(dir);
+    webPush = { sendNotification: vi.fn().mockResolvedValue(undefined) };
+    app = createInternalApp({ store, webPush, logger: pino({ enabled: false }) });
   });
 
   it("POST /notify returns 404 when no subscription is registered", async () => {
@@ -103,13 +130,8 @@ describe("agora server", () => {
     expect(res.status).toBe(400);
   });
 
-  it("POST /reply logs and returns 200", async () => {
-    const res = await request(app).post("/reply").send({ text: "sounds good" });
-    expect(res.status).toBe(200);
-  });
-
-  it("POST /reply rejects a missing text field", async () => {
-    const res = await request(app).post("/reply").send({});
-    expect(res.status).toBe(400);
+  it("does not mount public routes at all", async () => {
+    const res = await request(app).get("/healthz");
+    expect(res.status).toBe(404);
   });
 });

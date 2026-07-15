@@ -6,7 +6,7 @@ import pino from "pino";
 import webpush from "web-push";
 import { loadConfig } from "./config.js";
 import { SubscriptionStore } from "./push/subscription-store.js";
-import { createServer } from "./server.js";
+import { createPublicApp, createInternalApp } from "./server.js";
 
 const logger = pino();
 const config = loadConfig();
@@ -18,14 +18,21 @@ if (config.vapidPublicKey && config.vapidPrivateKey) {
   logger.warn("VAPID keys not configured — /health will report not-ready");
 }
 
-const app = createServer({ config, store, webPush: webpush, logger });
+const publicApp = createPublicApp({ config, store, logger });
+const internalApp = createInternalApp({ store, webPush: webpush, logger });
 
-app.listen(config.port, () => {
-  logger.info({ port: config.port }, "agora listening");
-});
+const servers = [
+  publicApp.listen(config.port, () => {
+    logger.info({ port: config.port }, "agora public listener up");
+  }),
+  internalApp.listen(config.internalPort, () => {
+    logger.info({ port: config.internalPort }, "agora internal listener up (/notify)");
+  }),
+];
 
 function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
+  for (const server of servers) server.close();
   process.exit(0);
 }
 
