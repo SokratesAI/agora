@@ -20,15 +20,71 @@
       overflow: hidden;
     }
     header {
-      padding: 0.75rem 1rem;
+      padding: 0.6rem 1rem;
       border-bottom: 1px solid #26272b;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .header-top {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
-      flex: none;
     }
     header h1 { font-size: 1.1rem; margin: 0; }
     #status { font-size: 0.75rem; color: #8a8a8a; }
+    .header-conversations {
+      display: flex;
+      gap: 0.5rem;
+    }
+    #conversation-select {
+      flex: 1;
+      min-width: 0;
+      border-radius: 0.7rem;
+      border: 1px solid #333;
+      background: #1a1b1e;
+      color: #e8e8e8;
+      padding: 0.4rem 0.6rem;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    #new-chat-toggle {
+      padding: 0.4rem 0.75rem;
+      border-radius: 0.7rem;
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    #new-chat-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #26272b;
+      background: #17181b;
+      flex: none;
+    }
+    #new-chat-form[hidden] { display: none; }
+    #new-chat-form input,
+    #new-chat-form textarea {
+      border-radius: 0.7rem;
+      border: 1px solid #333;
+      background: #1a1b1e;
+      color: #e8e8e8;
+      padding: 0.5rem 0.7rem;
+      font: inherit;
+      font-size: 0.9rem;
+      resize: none;
+    }
+    #new-chat-form .new-chat-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    #new-chat-cancel {
+      background: #2a2b30;
+    }
+    #new-chat-status { font-size: 0.75rem; color: #8a8a8a; min-height: 1em; }
     #messages {
       flex: 1;
       overflow-y: auto;
@@ -100,9 +156,24 @@
 </head>
 <body>
   <header>
-    <h1>Agora</h1>
-    <span id="status"></span>
+    <div class="header-top">
+      <h1>Agora</h1>
+      <span id="status"></span>
+    </div>
+    <div class="header-conversations">
+      <select id="conversation-select"><option value="">Main</option></select>
+      <button type="button" id="new-chat-toggle" title="New chat">+ New</button>
+    </div>
   </header>
+  <form id="new-chat-form" hidden>
+    <input id="new-chat-name" type="text" placeholder="Name (e.g. Marcus)" required />
+    <textarea id="new-chat-personality" placeholder="Personality / system prompt (optional)..." rows="2"></textarea>
+    <p id="new-chat-status"></p>
+    <div class="new-chat-actions">
+      <button type="button" id="new-chat-cancel">Cancel</button>
+      <button type="submit">Create</button>
+    </div>
+  </form>
   <div id="messages"><p id="empty">No messages yet.</p></div>
   <form id="reply-form">
     <textarea id="reply-text" placeholder="Message..." rows="1"></textarea>

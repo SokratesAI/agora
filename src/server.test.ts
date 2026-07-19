@@ -165,9 +165,26 @@ describe("agora public app", () => {
     expect(res.status).toBe(400);
   });
 
-  it("does not mount POST /conversations (create) — that's the internal app's job", async () => {
-    const res = await request(app).post("/conversations").send({ name: "Haiku" });
-    expect(res.status).toBe(404);
+  it("POST /conversations creates a new conversation (Edvard creating from the phone UI)", async () => {
+    const res = await request(app)
+      .post("/conversations")
+      .send({ name: "Haiku", personality: "a helpful persona" });
+    expect(res.status).toBe(201);
+    expect(res.body.conversation).toMatchObject({ name: "Haiku", personality: "a helpful persona" });
+  });
+
+  it("POST /conversations returns the existing conversation on a repeat name", async () => {
+    const first = await request(app)
+      .post("/conversations")
+      .send({ name: "Haiku", personality: "a helpful persona" });
+    const second = await request(app).post("/conversations").send({ name: "Haiku" });
+    expect(second.status).toBe(200);
+    expect(second.body.conversation.id).toBe(first.body.conversation.id);
+  });
+
+  it("POST /conversations rejects a missing name", async () => {
+    const res = await request(app).post("/conversations").send({});
+    expect(res.status).toBe(400);
   });
 });
 
