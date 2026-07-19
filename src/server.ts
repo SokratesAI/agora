@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
+import type { MessageStore } from "./chat/message-store.js";
 import {
   notificationsSent,
   notificationsFailed,
@@ -19,6 +20,7 @@ export interface WebPushSender {
 export interface ServerDeps {
   config: Config;
   store: SubscriptionStore;
+  messages: MessageStore;
   webPush: WebPushSender;
   logger: pino.Logger;
 }
@@ -39,7 +41,12 @@ function isValidSubscription(body: unknown): body is PushSubscriptionRecord {
  * No app-level auth; the Tailscale/NetworkPolicy network boundary is the
  * trust boundary, same as everywhere else on this platform.
  */
-export function createPublicApp({ config, store, logger }: Omit<ServerDeps, "webPush">): Express {
+export function createPublicApp({
+  config,
+  store,
+  messages,
+  logger,
+}: Omit<ServerDeps, "webPush">): Express {
   const app = express();
   app.use(express.json());
   app.use(express.static("public"));
@@ -75,18 +82,22 @@ export function createPublicApp({ config, store, logger }: Omit<ServerDeps, "web
     res.status(201).json({ status: "subscribed" });
   });
 
-  // v1 scope: logged only, not routed anywhere — same "prove the round
-  // trip before building routing" precedent WhatsApp Bridge's inbound
-  // handling set.
-  app.post("/reply", (req, res) => {
+  // Chat history for the frontend's bubble UI — every persona's /notify and
+  // every one of Edvard's /reply calls lands in the same ordered thread.
+  app.get("/messages", async (_req, res) => {
+    res.status(200).json({ messages: await messages.list() });
+  });
+
+  app.post("/reply", async (req, res) => {
     const { text } = req.body as { text?: unknown };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
       return;
     }
+    const message = await messages.append("Edvard", text);
     repliesReceived.add(1);
     logger.info({ text }, "reply received");
-    res.status(200).json({ status: "received" });
+    res.status(200).json({ status: "received", message });
   });
 
   return app;
@@ -100,7 +111,12 @@ export function createPublicApp({ config, store, logger }: Omit<ServerDeps, "web
  * never from the tailscale namespace. Mirrors whatsapp-bridge's /send
  * staying unreachable from outside the cluster.
  */
-export function createInternalApp({ store, webPush, logger }: Omit<ServerDeps, "config">): Express {
+export function createInternalApp({
+  store,
+  messages,
+  webPush,
+  logger,
+}: Omit<ServerDeps, "config">): Express {
   const app = express();
   app.use(express.json());
 
@@ -110,20 +126,25 @@ export function createInternalApp({ store, webPush, logger }: Omit<ServerDeps, "
       res.status(400).json({ error: "text is required" });
       return;
     }
+    const title = typeof persona === "string" && persona.length > 0 ? persona : "Agora";
+    // Recorded in the thread regardless of push-delivery outcome below — the
+    // message genuinely happened even if the phone doesn't have a
+    // subscription registered yet.
+    const message = await messages.append(title, text);
+
     const subscription = await store.load();
     if (!subscription) {
-      res.status(404).json({ error: "no subscription registered yet" });
+      res.status(404).json({ error: "no subscription registered yet", message });
       return;
     }
-    const title = typeof persona === "string" && persona.length > 0 ? persona : "Agora";
     try {
       await webPush.sendNotification(subscription, JSON.stringify({ title, body: text }));
       notificationsSent.add(1, { persona: title });
-      res.status(200).json({ status: "sent" });
+      res.status(200).json({ status: "sent", message });
     } catch (err) {
       notificationsFailed.add(1, { persona: title });
       logger.error({ err }, "push send failed");
-      res.status(502).json({ error: "push send failed" });
+      res.status(502).json({ error: "push send failed", message });
     }
   });
 

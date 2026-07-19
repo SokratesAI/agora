@@ -7,23 +7,107 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" />
   <style>
-    body { font-family: sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
-    #status { color: #555; margin-bottom: 2rem; }
-    textarea { width: 100%; height: 6rem; }
-    button { margin-top: 0.5rem; }
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: #111214;
+      color: #e8e8e8;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+    }
+    header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #26272b;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex: none;
+    }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    #status { font-size: 0.75rem; color: #8a8a8a; }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .bubble {
+      max-width: 78%;
+      padding: 0.45rem 0.75rem;
+      border-radius: 1rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.95rem;
+    }
+    .bubble .meta {
+      display: block;
+      font-size: 0.65rem;
+      opacity: 0.65;
+      margin-bottom: 0.15rem;
+    }
+    .bubble.mine {
+      align-self: flex-end;
+      background: #2563eb;
+      color: #fff;
+      border-bottom-right-radius: 0.3rem;
+    }
+    .bubble.theirs {
+      align-self: flex-start;
+      background: #262830;
+      color: #e8e8e8;
+      border-bottom-left-radius: 0.3rem;
+    }
+    #empty { color: #666; text-align: center; margin-top: 2rem; font-size: 0.9rem; }
+    form {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.5rem;
+      padding: 0.6rem;
+      border-top: 1px solid #26272b;
+      flex: none;
+    }
+    textarea {
+      flex: 1;
+      resize: none;
+      max-height: 6rem;
+      border-radius: 0.9rem;
+      border: 1px solid #333;
+      background: #1a1b1e;
+      color: #e8e8e8;
+      padding: 0.55rem 0.85rem;
+      font: inherit;
+      line-height: 1.3;
+    }
+    textarea:focus { outline: 1px solid #2563eb; }
+    button {
+      border: none;
+      border-radius: 0.9rem;
+      background: #2563eb;
+      color: #fff;
+      padding: 0.6rem 1.1rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
   </style>
 </head>
 <body>
-  <h1>Agora</h1>
-  <p id="status"></p>
-
+  <header>
+    <h1>Agora</h1>
+    <span id="status"></span>
+  </header>
+  <div id="messages"><p id="empty">No messages yet.</p></div>
   <form id="reply-form">
-    <label for="reply-text">Reply</label>
-    <textarea id="reply-text" placeholder="Type a reply..."></textarea>
+    <textarea id="reply-text" placeholder="Message..." rows="1"></textarea>
     <button type="submit">Send</button>
-    <p id="reply-status"></p>
   </form>
-
   <script src="/app.js"></script>
 </body>
 </html>
