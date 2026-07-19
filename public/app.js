@@ -15,8 +15,26 @@ const statusEl = document.getElementById("status");
 const messagesEl = document.getElementById("messages");
 const replyForm = document.getElementById("reply-form");
 const replyInput = document.getElementById("reply-text");
+const conversationSelect = document.getElementById("conversation-select");
+const newChatToggle = document.getElementById("new-chat-toggle");
+const newChatForm = document.getElementById("new-chat-form");
+const newChatName = document.getElementById("new-chat-name");
+const newChatPersonality = document.getElementById("new-chat-personality");
+const newChatStatus = document.getElementById("new-chat-status");
+const newChatCancel = document.getElementById("new-chat-cancel");
 
+// null = the original global thread ("Main" in the switcher). A string id
+// means a conversation created via POST /conversations.
+let currentConversationId = null;
 let renderedKey = "";
+
+function messagesEndpoint() {
+  return currentConversationId ? `/conversations/${currentConversationId}/messages` : "/messages";
+}
+
+function replyEndpoint() {
+  return currentConversationId ? `/conversations/${currentConversationId}/reply` : "/reply";
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -27,7 +45,7 @@ function formatTime(iso) {
 }
 
 function renderMessages(messages) {
-  const key = messages.map((m) => m.id).join(",");
+  const key = `${currentConversationId ?? "main"}:${messages.map((m) => m.id).join(",")}`;
   if (key === renderedKey) return;
   renderedKey = key;
 
@@ -62,7 +80,7 @@ function renderMessages(messages) {
 
 async function fetchMessages() {
   try {
-    const res = await fetch("/messages");
+    const res = await fetch(messagesEndpoint());
     if (!res.ok) return;
     const { messages } = await res.json();
     renderMessages(messages);
@@ -70,6 +88,78 @@ async function fetchMessages() {
     // transient network hiccup — the next poll retries
   }
 }
+
+async function loadConversationList() {
+  try {
+    const res = await fetch("/conversations");
+    if (!res.ok) return;
+    const { conversations } = await res.json();
+    conversationSelect.innerHTML = "";
+    const mainOption = document.createElement("option");
+    mainOption.value = "";
+    mainOption.textContent = "Main";
+    conversationSelect.appendChild(mainOption);
+    for (const conversation of conversations) {
+      const option = document.createElement("option");
+      option.value = conversation.id;
+      option.textContent = conversation.name;
+      conversationSelect.appendChild(option);
+    }
+    conversationSelect.value = currentConversationId ?? "";
+  } catch {
+    // transient network hiccup — leave the switcher as-is
+  }
+}
+
+conversationSelect.addEventListener("change", () => {
+  currentConversationId = conversationSelect.value || null;
+  renderedKey = "";
+  fetchMessages();
+});
+
+newChatToggle.addEventListener("click", () => {
+  newChatForm.hidden = !newChatForm.hidden;
+  newChatStatus.textContent = "";
+  if (!newChatForm.hidden) newChatName.focus();
+});
+
+newChatCancel.addEventListener("click", () => {
+  newChatForm.hidden = true;
+  newChatName.value = "";
+  newChatPersonality.value = "";
+  newChatStatus.textContent = "";
+});
+
+newChatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = newChatName.value.trim();
+  if (!name) return;
+  const personality = newChatPersonality.value.trim();
+
+  newChatStatus.textContent = "Creating...";
+  try {
+    const res = await fetch("/conversations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, personality }),
+    });
+    if (!res.ok) {
+      newChatStatus.textContent = "Failed to create.";
+      return;
+    }
+    const { conversation } = await res.json();
+    newChatName.value = "";
+    newChatPersonality.value = "";
+    newChatForm.hidden = true;
+    await loadConversationList();
+    currentConversationId = conversation.id;
+    conversationSelect.value = conversation.id;
+    renderedKey = "";
+    fetchMessages();
+  } catch {
+    newChatStatus.textContent = "Failed to create.";
+  }
+});
 
 async function subscribeToPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
@@ -124,7 +214,7 @@ replyForm.addEventListener("submit", async (event) => {
   replyInput.value = "";
   replyInput.disabled = true;
   try {
-    await fetch("/reply", {
+    await fetch(replyEndpoint(), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
@@ -137,5 +227,6 @@ replyForm.addEventListener("submit", async (event) => {
 });
 
 fetchMessages();
+loadConversationList();
 setInterval(fetchMessages, POLL_INTERVAL_MS);
 subscribeToPush();

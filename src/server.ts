@@ -37,6 +37,34 @@ function isValidSubscription(body: unknown): body is PushSubscriptionRecord {
 }
 
 /**
+ * Create-or-get by name — shared by both apps. Edvard creates conversations
+ * from the phone UI (public); a persona's own poll loop resolves its
+ * conversation id the same way (internal). Same handler, same trust level
+ * either side needs for this action — no auth model beyond network
+ * boundary exists yet for either caller (see Multi-Persona-Conversations.md's
+ * open questions).
+ */
+function registerCreateConversationRoute(app: Express, conversations: ConversationStore): void {
+  app.post("/conversations", async (req, res) => {
+    const { name, personality } = req.body as { name?: unknown; personality?: unknown };
+    if (typeof name !== "string" || name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const existing = await conversations.findByName(name);
+    if (existing) {
+      res.status(200).json({ status: "exists", conversation: existing });
+      return;
+    }
+    const conversation = await conversations.create(
+      name,
+      typeof personality === "string" ? personality : "",
+    );
+    res.status(201).json({ status: "created", conversation });
+  });
+}
+
+/**
  * Public app: everything reachable from Edvard's phone via the
  * Tailscale-only Ingress (static PWA assets, health checks, subscribe,
  * reply). Deliberately does NOT include /notify — see createInternalApp.
@@ -108,6 +136,8 @@ export function createPublicApp({
   // Ideas/Multi-Persona-Conversations.md for the full design; this is the
   // first slice: conversations as first-class objects a persona can be
   // driven by, proven with agora-haiku-poc before any UI is built for it.
+  registerCreateConversationRoute(app, conversations);
+
   app.get("/conversations", async (_req, res) => {
     res.status(200).json({ conversations: await conversations.list() });
   });
@@ -161,29 +191,11 @@ export function createInternalApp({
   const app = express();
   app.use(express.json());
 
-  // Create-or-get by name, internal-only for now — no persona/UI-facing
-  // auth model exists yet (see Multi-Persona-Conversations.md's open
-  // questions), so conversation creation stays behind the same
-  // cluster-internal trust boundary as /notify below. A persona's own
-  // poll loop calls this once to resolve its conversation id rather than
-  // persisting one anywhere itself.
-  app.post("/conversations", async (req, res) => {
-    const { name, personality } = req.body as { name?: unknown; personality?: unknown };
-    if (typeof name !== "string" || name.length === 0) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
-    const existing = await conversations.findByName(name);
-    if (existing) {
-      res.status(200).json({ status: "exists", conversation: existing });
-      return;
-    }
-    const conversation = await conversations.create(
-      name,
-      typeof personality === "string" ? personality : "",
-    );
-    res.status(201).json({ status: "created", conversation });
-  });
+  // Also exposed on the public app (Edvard creates from the phone UI) —
+  // mounted here too so a persona's own poll loop can resolve its
+  // conversation id without depending on the public port being reachable
+  // from inside the cluster.
+  registerCreateConversationRoute(app, conversations);
 
   app.post("/conversations/:id/notify", async (req, res) => {
     const { text } = req.body as { text?: unknown };
