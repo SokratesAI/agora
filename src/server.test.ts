@@ -4,6 +4,7 @@ import pino from "pino";
 import type { Express } from "express";
 import { createPublicApp, createInternalApp, type WebPushSender } from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
+import { MessageStore } from "./chat/message-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -29,12 +30,14 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 describe("agora public app", () => {
   let app: Express;
   let store: SubscriptionStore;
+  let messages: MessageStore;
   let dir: string;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-server-test-"));
     store = new SubscriptionStore(dir);
-    app = createPublicApp({ config: makeConfig(), store, logger: pino({ enabled: false }) });
+    messages = new MessageStore(dir);
+    app = createPublicApp({ config: makeConfig(), store, messages, logger: pino({ enabled: false }) });
   });
 
   it("GET /healthz always returns 200", async () => {
@@ -51,6 +54,7 @@ describe("agora public app", () => {
     const unconfigured = createPublicApp({
       config: makeConfig({ vapidPublicKey: undefined, vapidPrivateKey: undefined }),
       store,
+      messages,
       logger: pino({ enabled: false }),
     });
     const res = await request(unconfigured).get("/health");
@@ -74,14 +78,29 @@ describe("agora public app", () => {
     expect(await store.load()).toEqual(validSubscription);
   });
 
-  it("POST /reply logs and returns 200", async () => {
+  it("POST /reply logs, stores, and returns 200", async () => {
     const res = await request(app).post("/reply").send({ text: "sounds good" });
     expect(res.status).toBe(200);
+    expect(res.body.message).toMatchObject({ sender: "Edvard", text: "sounds good" });
+    expect(await messages.list()).toMatchObject([{ sender: "Edvard", text: "sounds good" }]);
   });
 
   it("POST /reply rejects a missing text field", async () => {
     const res = await request(app).post("/reply").send({});
     expect(res.status).toBe(400);
+  });
+
+  it("GET /messages returns an empty list before anything is sent", async () => {
+    const res = await request(app).get("/messages");
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toEqual([]);
+  });
+
+  it("GET /messages returns stored messages in order", async () => {
+    await request(app).post("/reply").send({ text: "first" });
+    await request(app).post("/reply").send({ text: "second" });
+    const res = await request(app).get("/messages");
+    expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(["first", "second"]);
   });
 
   it("does not mount /notify at all — that's the internal app's job", async () => {
@@ -93,22 +112,25 @@ describe("agora public app", () => {
 describe("agora internal app", () => {
   let app: Express;
   let store: SubscriptionStore;
+  let messages: MessageStore;
   let webPush: WebPushSender;
   let dir: string;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-internal-test-"));
     store = new SubscriptionStore(dir);
+    messages = new MessageStore(dir);
     webPush = { sendNotification: vi.fn().mockResolvedValue(undefined) };
-    app = createInternalApp({ store, webPush, logger: pino({ enabled: false }) });
+    app = createInternalApp({ store, messages, webPush, logger: pino({ enabled: false }) });
   });
 
-  it("POST /notify returns 404 when no subscription is registered", async () => {
+  it("POST /notify returns 404 when no subscription is registered, but still records the message", async () => {
     const res = await request(app).post("/notify").send({ persona: "Marcus", text: "hi" });
     expect(res.status).toBe(404);
+    expect(await messages.list()).toMatchObject([{ sender: "Marcus", text: "hi" }]);
   });
 
-  it("POST /notify sends a push and returns 200 once subscribed", async () => {
+  it("POST /notify sends a push, stores the message, and returns 200 once subscribed", async () => {
     await store.save(validSubscription);
     const res = await request(app).post("/notify").send({ persona: "Marcus", text: "hi" });
     expect(res.status).toBe(200);
@@ -116,6 +138,7 @@ describe("agora internal app", () => {
       validSubscription,
       JSON.stringify({ title: "Marcus", body: "hi" }),
     );
+    expect(await messages.list()).toMatchObject([{ sender: "Marcus", text: "hi" }]);
   });
 
   it("POST /notify returns 502 when the push send fails", async () => {

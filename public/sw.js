@@ -1,6 +1,7 @@
-// PoC scope: show the push payload as a notification, and focus/open the
-// app on click. No caching/offline strategy yet — that's not what this PoC
-// is proving (see Agora's Roadmap.md Phase 1 Definition of Done).
+// Show the push payload as a notification, nudge any open tab to refetch
+// /messages so the chat thread updates without waiting for its poll
+// interval, and focus/open the app on click. No caching/offline strategy —
+// that's not what this PoC scope is proving.
 
 self.addEventListener("push", (event) => {
   let data = { title: "Agora", body: "" };
@@ -11,10 +12,15 @@ self.addEventListener("push", (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(data.title || "Agora", {
-      body: data.body || "",
-      icon: "/icon.svg",
-    }),
+    Promise.all([
+      self.registration.showNotification(data.title || "Agora", {
+        body: data.body || "",
+        icon: "/icon.svg",
+      }),
+      self.clients.matchAll({ type: "window" }).then((clients) => {
+        for (const client of clients) client.postMessage({ type: "agora-push" });
+      }),
+    ]),
   );
 });
 
