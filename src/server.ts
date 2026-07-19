@@ -3,6 +3,7 @@ import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
 import type { MessageStore } from "./chat/message-store.js";
+import type { ConversationStore } from "./chat/conversation-store.js";
 import {
   notificationsSent,
   notificationsFailed,
@@ -21,6 +22,7 @@ export interface ServerDeps {
   config: Config;
   store: SubscriptionStore;
   messages: MessageStore;
+  conversations: ConversationStore;
   webPush: WebPushSender;
   logger: pino.Logger;
 }
@@ -45,6 +47,7 @@ export function createPublicApp({
   config,
   store,
   messages,
+  conversations,
   logger,
 }: Omit<ServerDeps, "webPush">): Express {
   const app = express();
@@ -100,6 +103,43 @@ export function createPublicApp({
     res.status(200).json({ status: "received", message });
   });
 
+  // Multi-conversation PoC (2026-07-19) — additive alongside the global
+  // thread above, not a replacement. See the vault's
+  // Ideas/Multi-Persona-Conversations.md for the full design; this is the
+  // first slice: conversations as first-class objects a persona can be
+  // driven by, proven with agora-haiku-poc before any UI is built for it.
+  app.get("/conversations", async (_req, res) => {
+    res.status(200).json({ conversations: await conversations.list() });
+  });
+
+  app.get("/conversations/:id/messages", async (req, res) => {
+    const conversation = await conversations.get(req.params.id);
+    if (!conversation) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    res.status(200).json({
+      id: conversation.id,
+      name: conversation.name,
+      personality: conversation.personality,
+      messages: conversation.messages,
+    });
+  });
+
+  app.post("/conversations/:id/reply", async (req, res) => {
+    const { text } = req.body as { text?: unknown };
+    if (typeof text !== "string" || text.length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const message = await conversations.appendMessage(req.params.id, "Edvard", text);
+    if (!message) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    res.status(200).json({ status: "received", message });
+  });
+
   return app;
 }
 
@@ -114,11 +154,68 @@ export function createPublicApp({
 export function createInternalApp({
   store,
   messages,
+  conversations,
   webPush,
   logger,
 }: Omit<ServerDeps, "config">): Express {
   const app = express();
   app.use(express.json());
+
+  // Create-or-get by name, internal-only for now — no persona/UI-facing
+  // auth model exists yet (see Multi-Persona-Conversations.md's open
+  // questions), so conversation creation stays behind the same
+  // cluster-internal trust boundary as /notify below. A persona's own
+  // poll loop calls this once to resolve its conversation id rather than
+  // persisting one anywhere itself.
+  app.post("/conversations", async (req, res) => {
+    const { name, personality } = req.body as { name?: unknown; personality?: unknown };
+    if (typeof name !== "string" || name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const existing = await conversations.findByName(name);
+    if (existing) {
+      res.status(200).json({ status: "exists", conversation: existing });
+      return;
+    }
+    const conversation = await conversations.create(
+      name,
+      typeof personality === "string" ? personality : "",
+    );
+    res.status(201).json({ status: "created", conversation });
+  });
+
+  app.post("/conversations/:id/notify", async (req, res) => {
+    const { text } = req.body as { text?: unknown };
+    if (typeof text !== "string" || text.length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const conversation = await conversations.get(req.params.id);
+    if (!conversation) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    const message = await conversations.appendMessage(conversation.id, conversation.name, text);
+
+    const subscription = await store.load();
+    if (!subscription) {
+      res.status(404).json({ error: "no subscription registered yet", message });
+      return;
+    }
+    try {
+      await webPush.sendNotification(
+        subscription,
+        JSON.stringify({ title: conversation.name, body: text }),
+      );
+      notificationsSent.add(1, { persona: conversation.name });
+      res.status(200).json({ status: "sent", message });
+    } catch (err) {
+      notificationsFailed.add(1, { persona: conversation.name });
+      logger.error({ err }, "push send failed");
+      res.status(502).json({ error: "push send failed", message });
+    }
+  });
 
   app.post("/notify", async (req, res) => {
     const { persona, text } = req.body as { persona?: unknown; text?: unknown };

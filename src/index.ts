@@ -7,12 +7,14 @@ import webpush from "web-push";
 import { loadConfig } from "./config.js";
 import { SubscriptionStore } from "./push/subscription-store.js";
 import { MessageStore } from "./chat/message-store.js";
+import { ConversationStore } from "./chat/conversation-store.js";
 import { createPublicApp, createInternalApp } from "./server.js";
 
 const logger = pino();
 const config = loadConfig();
 const store = new SubscriptionStore(config.dataDir);
 const messages = new MessageStore(config.dataDir);
+const conversations = new ConversationStore(config.dataDir);
 
 if (config.vapidPublicKey && config.vapidPrivateKey) {
   webpush.setVapidDetails(config.vapidSubject, config.vapidPublicKey, config.vapidPrivateKey);
@@ -20,8 +22,8 @@ if (config.vapidPublicKey && config.vapidPrivateKey) {
   logger.warn("VAPID keys not configured — /health will report not-ready");
 }
 
-const publicApp = createPublicApp({ config, store, messages, logger });
-const internalApp = createInternalApp({ store, messages, webPush: webpush, logger });
+const publicApp = createPublicApp({ config, store, messages, conversations, logger });
+const internalApp = createInternalApp({ store, messages, conversations, webPush: webpush, logger });
 
 const servers = [
   publicApp.listen(config.port, () => {
