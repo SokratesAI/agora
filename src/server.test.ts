@@ -241,6 +241,111 @@ describe("agora public app", () => {
     const res = await request(app).patch(`/conversations/${conversation.id}`).send({ model: "nope:nope" });
     expect(res.status).toBe(400);
   });
+
+  it("PATCH /conversations/:id can archive a conversation", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app).patch(`/conversations/${conversation.id}`).send({ archived: true });
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.archived).toBe(true);
+  });
+
+  it("DELETE /conversations/:id removes it", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app).delete(`/conversations/${conversation.id}`);
+    expect(res.status).toBe(200);
+    expect(await conversations.get(conversation.id)).toBeNull();
+  });
+
+  it("DELETE /conversations/:id 404s for an unknown id", async () => {
+    const res = await request(app).delete("/conversations/nope");
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /conversations/:id/messages/:messageId retracts a message", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const message = await conversations.appendMessage(conversation.id, "Edvard", "hi");
+    const res = await request(app).delete(
+      `/conversations/${conversation.id}/messages/${message!.id}`,
+    );
+    expect(res.status).toBe(200);
+    const reloaded = await conversations.get(conversation.id);
+    expect(reloaded?.messages).toEqual([]);
+  });
+
+  it("DELETE /conversations/:id/messages/:messageId 404s for an unknown message", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app).delete(`/conversations/${conversation.id}/messages/nope`);
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /conversations/:id/messages/:messageId edits text and drops later messages", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const first = await conversations.appendMessage(conversation.id, "Edvard", "typo");
+    await conversations.appendMessage(conversation.id, "Haiku", "reply");
+    const res = await request(app)
+      .patch(`/conversations/${conversation.id}/messages/${first!.id}`)
+      .send({ text: "fixed" });
+    expect(res.status).toBe(200);
+    expect(res.body.message.text).toBe("fixed");
+    const reloaded = await conversations.get(conversation.id);
+    expect(reloaded?.messages.map((m) => m.text)).toEqual(["fixed"]);
+  });
+
+  it("POST /conversations/:id/reply accepts a per-message model override", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/reply`)
+      .send({ text: "answer with Opus please", model: "anthropic:claude-opus-4-8" });
+    expect(res.status).toBe(200);
+    expect(res.body.message.modelOverride).toBe("anthropic:claude-opus-4-8");
+  });
+
+  it("POST /conversations/:id/reply rejects an unknown model override", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/reply`)
+      .send({ text: "hi", model: "nope:nope" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /reply accepts a per-message model override on the global thread", async () => {
+    const res = await request(app)
+      .post("/reply")
+      .send({ text: "hi", model: "gemini:gemini-flash-latest" });
+    expect(res.status).toBe(200);
+    expect(res.body.message.modelOverride).toBe("gemini:gemini-flash-latest");
+  });
+
+  it("DELETE /messages/:messageId retracts a global-thread message", async () => {
+    const sent = await request(app).post("/reply").send({ text: "oops" });
+    const res = await request(app).delete(`/messages/${sent.body.message.id}`);
+    expect(res.status).toBe(200);
+    expect(await messages.list()).toEqual([]);
+  });
+
+  it("PATCH /messages/:messageId edits a global-thread message", async () => {
+    const sent = await request(app).post("/reply").send({ text: "typo" });
+    const res = await request(app)
+      .patch(`/messages/${sent.body.message.id}`)
+      .send({ text: "fixed" });
+    expect(res.status).toBe(200);
+    expect(res.body.message.text).toBe("fixed");
+  });
+
+  it("GET /search finds matches across the global thread and named conversations", async () => {
+    await request(app).post("/reply").send({ text: "let's talk about training today" });
+    const conversation = await conversations.create("Marcus", "a trainer persona");
+    await conversations.appendMessage(conversation.id, "Marcus", "how was TRAINING yesterday?");
+    const res = await request(app).get("/search").query({ q: "training" });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
+  });
+
+  it("GET /search returns no results for an empty query", async () => {
+    const res = await request(app).get("/search");
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([]);
+  });
 });
 
 describe("agora internal app", () => {

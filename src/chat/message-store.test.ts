@@ -55,4 +55,46 @@ describe("MessageStore", () => {
     await store.append("Edvard", "hi");
     expect(await store.list()).toHaveLength(1);
   });
+
+  it("stores a per-message model override when given", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-messages-test-"));
+    const store = new MessageStore(dir);
+    const message = await store.append("Edvard", "hi", "anthropic:claude-opus-4-8");
+    expect(message.modelOverride).toBe("anthropic:claude-opus-4-8");
+    const withoutOverride = await store.append("Edvard", "hi again");
+    expect(withoutOverride.modelOverride).toBeUndefined();
+  });
+
+  it("deletes a message by id", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-messages-test-"));
+    const store = new MessageStore(dir);
+    const first = await store.append("Edvard", "one");
+    const second = await store.append("Claude", "two");
+    expect(await store.deleteMessage(first.id)).toBe(true);
+    const remaining = await store.list();
+    expect(remaining).toEqual([second]);
+  });
+
+  it("returns false when deleting a message that doesn't exist", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-messages-test-"));
+    const store = new MessageStore(dir);
+    expect(await store.deleteMessage("nope")).toBe(false);
+  });
+
+  it("edits a message's text and drops everything sent after it", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-messages-test-"));
+    const store = new MessageStore(dir);
+    const first = await store.append("Edvard", "origina text");
+    await store.append("Claude", "a reply to the typo");
+    const edited = await store.editMessage(first.id, "original text");
+    expect(edited?.text).toBe("original text");
+    const remaining = await store.list();
+    expect(remaining.map((m) => m.text)).toEqual(["original text"]);
+  });
+
+  it("returns null when editing a message that doesn't exist", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-messages-test-"));
+    const store = new MessageStore(dir);
+    expect(await store.editMessage("nope", "text")).toBeNull();
+  });
 });

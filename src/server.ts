@@ -78,16 +78,18 @@ function registerCreateConversationRoute(app: Express, conversations: Conversati
   });
 }
 
-/** Edit an existing conversation's settings (name/personality/model/thinking)
- * later, or backfill model/thinking on a conversation created before those
- * fields existed — see conversation-store.ts's readFile() defaulting. */
+/** Edit an existing conversation's settings (name/personality/model/thinking/
+ * archived) later, or backfill model/thinking on a conversation created
+ * before those fields existed — see conversation-store.ts's readFile()
+ * defaulting. */
 function registerUpdateConversationRoute(app: Express, conversations: ConversationStore): void {
   app.patch("/conversations/:id", async (req, res) => {
-    const { name, personality, model, thinking } = req.body as {
+    const { name, personality, model, thinking, archived } = req.body as {
       name?: unknown;
       personality?: unknown;
       model?: unknown;
       thinking?: unknown;
+      archived?: unknown;
     };
     if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
       res.status(400).json({ error: "unknown model" });
@@ -98,6 +100,7 @@ function registerUpdateConversationRoute(app: Express, conversations: Conversati
     if (typeof personality === "string") updates.personality = personality;
     if (typeof model === "string") updates.model = model;
     if (typeof thinking === "boolean") updates.thinking = thinking;
+    if (typeof archived === "boolean") updates.archived = archived;
 
     const conversation = await conversations.update(req.params.id, updates);
     if (!conversation) {
@@ -164,15 +167,62 @@ export function createPublicApp({
   });
 
   app.post("/reply", async (req, res) => {
+    const { text, model } = req.body as { text?: unknown; model?: unknown };
+    if (typeof text !== "string" || text.length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
+      res.status(400).json({ error: "unknown model" });
+      return;
+    }
+    const message = await messages.append("Edvard", text, typeof model === "string" ? model : undefined);
+    repliesReceived.add(1);
+    logger.info({ text }, "reply received");
+    res.status(200).json({ status: "received", message });
+  });
+
+  // Delete/edit-and-resend for the legacy global thread (Phase 5) — mirrors
+  // the per-conversation routes below so "Main" gets the same chat-UX
+  // primitives as named conversations, not a second-class experience.
+  app.delete("/messages/:messageId", async (req, res) => {
+    const deleted = await messages.deleteMessage(req.params.messageId);
+    if (!deleted) {
+      res.status(404).json({ error: "message not found" });
+      return;
+    }
+    res.status(200).json({ status: "deleted" });
+  });
+
+  app.patch("/messages/:messageId", async (req, res) => {
     const { text } = req.body as { text?: unknown };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
       return;
     }
-    const message = await messages.append("Edvard", text);
-    repliesReceived.add(1);
-    logger.info({ text }, "reply received");
-    res.status(200).json({ status: "received", message });
+    const message = await messages.editMessage(req.params.messageId, text);
+    if (!message) {
+      res.status(404).json({ error: "message not found" });
+      return;
+    }
+    res.status(200).json({ status: "updated", message });
+  });
+
+  // Search across every named conversation plus the legacy global thread —
+  // a flat GET so the frontend doesn't need to know which store a hit came
+  // from ahead of time.
+  app.get("/search", async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (!q) {
+      res.status(200).json({ results: [] });
+      return;
+    }
+    const needle = q.toLowerCase();
+    const mainResults = (await messages.list())
+      .filter((m) => m.text.toLowerCase().includes(needle))
+      .map((message) => ({ conversationId: null, conversationName: "Main", message }));
+    const conversationResults = await conversations.search(q);
+    res.status(200).json({ results: [...mainResults, ...conversationResults] });
   });
 
   // Multi-conversation PoC (2026-07-19) — additive alongside the global
@@ -195,6 +245,16 @@ export function createPublicApp({
     res.status(200).json({ conversations: await conversations.list() });
   });
 
+  // Delete a whole conversation (Phase 5 — no DELETE existed before this).
+  app.delete("/conversations/:id", async (req, res) => {
+    const deleted = await conversations.delete(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    res.status(200).json({ status: "deleted" });
+  });
+
   app.get("/conversations/:id/messages", async (req, res) => {
     const conversation = await conversations.get(req.params.id);
     if (!conversation) {
@@ -207,22 +267,60 @@ export function createPublicApp({
       personality: conversation.personality,
       model: conversation.model,
       thinking: conversation.thinking,
+      archived: conversation.archived,
       messages: conversation.messages,
     });
   });
 
   app.post("/conversations/:id/reply", async (req, res) => {
-    const { text } = req.body as { text?: unknown };
+    const { text, model } = req.body as { text?: unknown; model?: unknown };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
       return;
     }
-    const message = await conversations.appendMessage(req.params.id, "Edvard", text);
+    if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
+      res.status(400).json({ error: "unknown model" });
+      return;
+    }
+    const message = await conversations.appendMessage(
+      req.params.id,
+      "Edvard",
+      text,
+      typeof model === "string" ? model : undefined,
+    );
     if (!message) {
       res.status(404).json({ error: "conversation not found" });
       return;
     }
     res.status(200).json({ status: "received", message });
+  });
+
+  // Retract a message (delete) — regenerate reuses this on a persona's own
+  // last reply, since removing it makes the conversation's last sender
+  // Edvard again and the runner regenerates on its next poll.
+  app.delete("/conversations/:id/messages/:messageId", async (req, res) => {
+    const deleted = await conversations.deleteMessage(req.params.id, req.params.messageId);
+    if (!deleted) {
+      res.status(404).json({ error: "conversation or message not found" });
+      return;
+    }
+    res.status(200).json({ status: "deleted" });
+  });
+
+  // Edit-and-resend — edits a message's text and drops everything sent
+  // after it in this conversation (see conversation-store.ts's editMessage).
+  app.patch("/conversations/:id/messages/:messageId", async (req, res) => {
+    const { text } = req.body as { text?: unknown };
+    if (typeof text !== "string" || text.length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const message = await conversations.editMessage(req.params.id, req.params.messageId, text);
+    if (!message) {
+      res.status(404).json({ error: "conversation or message not found" });
+      return;
+    }
+    res.status(200).json({ status: "updated", message });
   });
 
   return app;

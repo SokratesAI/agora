@@ -29,6 +29,13 @@ self.addEventListener("push", (event) => {
       self.clients.matchAll({ type: "window" }).then((clients) => {
         for (const client of clients) client.postMessage({ type: "agora-push" });
       }),
+      // Unread badge (Feature-Ideas.md #43) — best-effort presence signal,
+      // not a precise count (a torn-down/restarted service worker can't
+      // reliably keep a running total across pushes). app.js clears it on
+      // visibilitychange when Edvard actually opens the app.
+      self.navigator && self.navigator.setAppBadge
+        ? self.navigator.setAppBadge().catch(() => {})
+        : Promise.resolve(),
     ]),
   );
 });
