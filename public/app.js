@@ -6,68 +6,84 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 // Everything sent from this device is /reply, always attributed to "Edvard"
-// server-side — used here purely to decide which side of the thread a
-// bubble renders on, not as any kind of auth.
+// server-side — used here purely to decide which side a message renders
+// on, not as any kind of auth.
 const MY_SENDER = "Edvard";
 const POLL_INTERVAL_MS = 3000;
-// Phase 5's "retry with a different provider" (Feature-Ideas.md #31,
-// Edvard's own reframing away from silent auto-fallback): the architecture
-// has no error signal at all when a reply doesn't show up (fire-and-forget
-// /reply, async poll-based runner) — this is a timeout heuristic, not a
-// real failure detection. Long enough that ordinary replies never trip it.
+// "Retry with a different provider" (Feature-Ideas.md #31, Edvard's own
+// reframing away from silent auto-fallback): the architecture has no error
+// signal at all when a reply doesn't show up (fire-and-forget /reply,
+// async poll-based runner) — this is a timeout heuristic, not real failure
+// detection. Long enough that ordinary replies never trip it.
 const RETRY_OFFER_MS = 45000;
 
 const statusEl = document.getElementById("status");
 const messagesEl = document.getElementById("messages");
+const headerTitle = document.getElementById("header-title");
+const drawerOpenBtn = document.getElementById("drawer-open");
+const drawerCloseBtn = document.getElementById("drawer-close");
+const drawerScrim = document.getElementById("drawer-scrim");
+const drawer = document.getElementById("drawer");
+const drawerSearchInput = document.getElementById("drawer-search-input");
+const drawerSearchResults = document.getElementById("drawer-search-results");
+const drawerListWrap = document.getElementById("drawer-list-wrap");
+const drawerList = document.getElementById("drawer-list");
+const drawerNewChat = document.getElementById("drawer-new-chat");
+const themeToggle = document.getElementById("theme-toggle");
+const headerNewChatBtn = document.getElementById("header-new-chat");
+const headerOverflowBtn = document.getElementById("header-overflow");
+
+const actionSheetScrim = document.getElementById("action-sheet-scrim");
+const actionSheetTitle = document.getElementById("action-sheet-title");
+const sheetEdit = document.getElementById("sheet-edit");
+const sheetArchive = document.getElementById("sheet-archive");
+const sheetArchiveLabel = document.getElementById("sheet-archive-label");
+const sheetDelete = document.getElementById("sheet-delete");
+
+const editModalScrim = document.getElementById("edit-modal-scrim");
+const editModal = document.getElementById("edit-modal");
+const editName = document.getElementById("edit-name");
+const editTemplateRow = document.getElementById("edit-template-row");
+const editPersonality = document.getElementById("edit-personality");
+const editModel = document.getElementById("edit-model");
+const editBadge = document.getElementById("edit-badge");
+const editThinkingRow = document.getElementById("edit-thinking-row");
+const editThinking = document.getElementById("edit-thinking");
+const editStatus = document.getElementById("edit-status");
+const editCancel = document.getElementById("edit-cancel");
+
+const newChatModalScrim = document.getElementById("new-chat-modal-scrim");
+const newChatModal = document.getElementById("new-chat-modal");
+const newChatName = document.getElementById("new-chat-name");
+const newChatTemplateRow = document.getElementById("new-chat-template-row");
+const newChatPersonality = document.getElementById("new-chat-personality");
+const newChatModel = document.getElementById("new-chat-model");
+const newChatBadge = document.getElementById("new-chat-badge");
+const newChatThinkingRow = document.getElementById("new-chat-thinking-row");
+const newChatThinking = document.getElementById("new-chat-thinking");
+const newChatStatus = document.getElementById("new-chat-status");
+const newChatCancel = document.getElementById("new-chat-cancel");
+
 const replyForm = document.getElementById("reply-form");
 const replyInput = document.getElementById("reply-text");
 const replyModel = document.getElementById("reply-model");
-const conversationSelect = document.getElementById("conversation-select");
-const themeToggle = document.getElementById("theme-toggle");
-const searchToggle = document.getElementById("search-toggle");
-const searchPanel = document.getElementById("search-panel");
-const searchInput = document.getElementById("search-input");
-const searchResultsEl = document.getElementById("search-results");
-const newChatToggle = document.getElementById("new-chat-toggle");
-const newChatForm = document.getElementById("new-chat-form");
-const newChatName = document.getElementById("new-chat-name");
-const newChatPersonality = document.getElementById("new-chat-personality");
-const newChatStatus = document.getElementById("new-chat-status");
-const newChatCancel = document.getElementById("new-chat-cancel");
-const newChatModel = document.getElementById("new-chat-model");
-const newChatThinkingRow = document.getElementById("new-chat-thinking-row");
-const newChatThinking = document.getElementById("new-chat-thinking");
-const newChatBadge = document.getElementById("new-chat-badge");
-const templateRow = document.getElementById("template-row");
-const settingsToggle = document.getElementById("conversation-settings-toggle");
-const settingsForm = document.getElementById("conversation-settings-form");
-const settingsName = document.getElementById("settings-name");
-const settingsPersonality = document.getElementById("settings-personality");
-const settingsModel = document.getElementById("settings-model");
-const settingsBadge = document.getElementById("settings-badge");
-const settingsThinkingRow = document.getElementById("settings-thinking-row");
-const settingsThinking = document.getElementById("settings-thinking");
-const settingsArchived = document.getElementById("settings-archived");
-const settingsStatus = document.getElementById("settings-status");
-const settingsCancel = document.getElementById("settings-cancel");
-const settingsDelete = document.getElementById("settings-delete");
+const plusButton = document.getElementById("plus-button");
+const modelPopover = document.getElementById("model-popover");
 
-// null = the original global thread ("Main" in the switcher). A string id
+// null = the original global thread ("Main" in the drawer). A string id
 // means a conversation created via POST /conversations. Seeded from the
 // URL so a cold-opened notification (no window was already running) lands
 // on the right conversation instead of defaulting to Main — see sw.js's
 // notificationclick, which builds this URL.
 let currentConversationId = new URLSearchParams(location.search).get("conversation") || null;
 let renderedKey = "";
-// Keyed by model id ("<provider>:<model>") -> full ModelOption, so the
-// thinking checkbox / capability badge can react to a selection without a
-// second round trip to the server.
 let modelCatalogById = new Map();
 let allConversations = [];
+// Which conversation the open action sheet/edit modal applies to — usually
+// currentConversationId, but a drawer row's own "⋮" can target a
+// conversation without switching to it first.
+let sheetTargetId = null;
 
-// --- Personality templates gallery (Phase 5, Feature-Ideas.md #14) -------
-// Static to start, matches this platform's PoC-first bias — a real
-// templates *editor* is out of scope for this round.
 const PERSONALITY_TEMPLATES = [
   { name: "Trainer", text: "You are a supportive but honest fitness/training coach. Be direct about what's working and what isn't, celebrate real progress, and never sugarcoat a missed session." },
   { name: "Study buddy", text: "You are a patient study partner. Ask questions that check real understanding rather than just confirming what was said, and suggest what to review next." },
@@ -75,7 +91,7 @@ const PERSONALITY_TEMPLATES = [
   { name: "Plain assistant", text: "You are a helpful, concise assistant. Answer directly, ask for clarification only when genuinely needed." },
 ];
 
-// --- Theme (Feature-Ideas.md #10) -----------------------------------------
+// --- Theme ------------------------------------------------------------
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("agora-theme", theme);
@@ -86,23 +102,14 @@ themeToggle.addEventListener("click", () => {
   applyTheme(current);
 });
 
-// --- Unread badge (Feature-Ideas.md #43) ----------------------------------
-// Best-effort — the Badging API isn't universally supported, and this is a
-// presence signal ("something happened while you were away"), not a
-// precise unread count, since the service worker can be torn down between
-// pushes and can't reliably keep a running total.
+// --- Unread badge -------------------------------------------------------
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && navigator.clearAppBadge) {
     navigator.clearAppBadge().catch(() => {});
   }
 });
 
-// --- Minimal, safe markdown (Feature-Ideas.md #1) -------------------------
-// Escapes first, then layers a small set of markdown substitutions on top
-// of the already-escaped text — so even if a substitution's own regex has
-// a bug, the worst case is malformed *text*, never an injected tag, since
-// raw '<'/'>'/'&' from the source message are gone before any markdown
-// pattern runs.
+// --- Minimal, safe markdown ---------------------------------------------
 function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
@@ -138,22 +145,13 @@ function renderMarkdown(text) {
   // Restore code blocks LAST, after paragraph-splitting and newline-to-<br>
   // conversion — the placeholder token has no newlines of its own, so a
   // multi-line code block's real newlines survive untouched inside <pre>
-  // instead of being turned into <br> (an earlier version restored code
-  // blocks first and corrupted their formatting this way).
+  // instead of being turned into <br>.
   const paragraphs = withPlaceholders
     .split(/\n{2,}/)
     .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
     .join("");
   const withCode = paragraphs.replace(CODE_BLOCK_PLACEHOLDER_RE, (_m, i) => codeBlocks[Number(i)]);
   return withCode || "<p></p>";
-}
-
-// --- Avatars (Feature-Ideas.md #11) ---------------------------------------
-const AVATAR_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#059669", "#d97706", "#0891b2", "#dc2626"];
-function avatarFor(name) {
-  let hash = 0;
-  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return { color: AVATAR_COLORS[hash % AVATAR_COLORS.length], initial: (name[0] || "?").toUpperCase() };
 }
 
 function messagesEndpoint() {
@@ -171,13 +169,412 @@ function messageEndpoint(messageId) {
 }
 
 function setStatus(text) {
+  if (!text) {
+    statusEl.classList.remove("visible");
+    statusEl.textContent = "";
+    return;
+  }
   statusEl.textContent = text;
+  statusEl.classList.add("visible");
 }
 
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// --- Drawer -----------------------------------------------------------
+function openDrawer() {
+  drawer.hidden = false;
+  drawerScrim.hidden = false;
+}
+function closeDrawer() {
+  drawer.hidden = true;
+  drawerScrim.hidden = true;
+  drawerSearchInput.value = "";
+  drawerSearchResults.hidden = true;
+  drawerListWrap.hidden = false;
+}
+drawerOpenBtn.addEventListener("click", openDrawer);
+drawerCloseBtn.addEventListener("click", closeDrawer);
+drawerScrim.addEventListener("click", closeDrawer);
+
+function renderDrawerRow(id, name, archived) {
+  const row = document.createElement("div");
+  row.className = `drawer-row ${id === currentConversationId ? "active" : ""}`;
+  const nameEl = document.createElement("span");
+  nameEl.className = "drawer-row-name";
+  // Archived conversations only ever appear here via search (Feature-
+  // Ideas.md #81 — hidden from the default list, not deleted) — labeled
+  // so "how do I find it again to unarchive it" has an actual answer.
+  nameEl.textContent = archived ? `${name} · Archived` : name;
+  row.appendChild(nameEl);
+  row.addEventListener("click", () => switchConversation(id));
+  if (id !== null) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "drawer-row-more";
+    more.textContent = "⋮";
+    more.title = "Conversation actions";
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openActionSheet(id, name);
+    });
+    row.appendChild(more);
+  }
+  return row;
+}
+
+async function switchConversation(id) {
+  currentConversationId = id;
+  editingMessageId = null;
+  renderedKey = "";
+  closeDrawer();
+  updateHeaderControls();
+  await fetchMessages();
+}
+
+async function loadConversationList() {
+  try {
+    const res = await fetch("/conversations");
+    if (!res.ok) return;
+    const { conversations } = await res.json();
+    allConversations = conversations;
+    renderDrawerList(conversations);
+    updateHeaderControls();
+  } catch {
+    // transient network hiccup — leave the drawer as-is
+  }
+}
+
+function renderDrawerList(conversations) {
+  drawerList.innerHTML = "";
+  drawerList.appendChild(renderDrawerRow(null, "Main"));
+  // Archived conversations are hidden from the drawer, not deleted
+  // (Feature-Ideas.md #81) — still reachable via search.
+  for (const conversation of conversations) {
+    if (conversation.archived) continue;
+    drawerList.appendChild(renderDrawerRow(conversation.id, conversation.name));
+  }
+}
+
+function updateHeaderControls() {
+  if (!currentConversationId) {
+    headerTitle.textContent = "Main";
+    headerOverflowBtn.style.opacity = "0.35";
+    return;
+  }
+  headerOverflowBtn.style.opacity = "1";
+  const known = allConversations.find((c) => c.id === currentConversationId);
+  if (known) headerTitle.textContent = known.name;
+}
+
+// --- Drawer search (conversation names client-side + message content via API) --
+let searchDebounce;
+drawerSearchInput.addEventListener("input", () => {
+  const q = drawerSearchInput.value.trim();
+  if (!q) {
+    drawerSearchResults.hidden = true;
+    drawerListWrap.hidden = false;
+    return;
+  }
+  drawerListWrap.hidden = true;
+  drawerSearchResults.hidden = false;
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => runSearch(q), 250);
+});
+
+async function runSearch(q) {
+  drawerSearchResults.innerHTML = "";
+
+  // Archived conversations ARE included here (unlike the default drawer
+  // list) — search is the only way back to one once it's archived, so
+  // excluding it here would make archiving a one-way trip.
+  const nameMatches = allConversations.filter((c) =>
+    c.name.toLowerCase().includes(q.toLowerCase()),
+  );
+  if (nameMatches.length > 0) {
+    const label = document.createElement("div");
+    label.className = "drawer-section-label";
+    label.textContent = "Conversations";
+    drawerSearchResults.appendChild(label);
+    for (const match of nameMatches) {
+      drawerSearchResults.appendChild(renderDrawerRow(match.id, match.name, match.archived));
+    }
+  }
+
+  try {
+    const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) return;
+    const { results } = await res.json();
+    if (results.length === 0) return;
+    const label = document.createElement("div");
+    label.className = "drawer-section-label";
+    label.textContent = "Messages";
+    drawerSearchResults.appendChild(label);
+    for (const result of results.slice(0, 30)) {
+      const item = document.createElement("div");
+      item.className = "search-hit";
+      const nameEl = document.createElement("span");
+      nameEl.className = "hit-name";
+      nameEl.textContent = result.conversationName;
+      const textEl = document.createElement("span");
+      textEl.textContent = result.message.text.slice(0, 140);
+      item.append(nameEl, textEl);
+      item.addEventListener("click", () => switchConversation(result.conversationId));
+      drawerSearchResults.appendChild(item);
+    }
+  } catch {
+    // transient network hiccup — name matches above still work
+  }
+}
+
+// --- Action sheet -------------------------------------------------------
+function openActionSheet(id, name) {
+  sheetTargetId = id;
+  actionSheetTitle.textContent = name;
+  const conversation = allConversations.find((c) => c.id === id);
+  sheetArchiveLabel.textContent = conversation && conversation.archived ? "Unarchive" : "Archive";
+  actionSheetScrim.hidden = false;
+}
+function closeActionSheet() {
+  actionSheetScrim.hidden = true;
+}
+actionSheetScrim.addEventListener("click", (event) => {
+  if (event.target === actionSheetScrim) closeActionSheet();
+});
+headerOverflowBtn.addEventListener("click", () => {
+  if (!currentConversationId) return;
+  openActionSheet(currentConversationId, headerTitle.textContent);
+});
+
+sheetArchive.addEventListener("click", async () => {
+  if (!sheetTargetId) return;
+  const conversation = allConversations.find((c) => c.id === sheetTargetId);
+  const archived = !(conversation && conversation.archived);
+  await fetch(`/conversations/${sheetTargetId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  closeActionSheet();
+  if (archived && sheetTargetId === currentConversationId) {
+    currentConversationId = null;
+    renderedKey = "";
+    updateHeaderControls();
+    await fetchMessages();
+  }
+  await loadConversationList();
+});
+
+sheetDelete.addEventListener("click", async () => {
+  if (!sheetTargetId) return;
+  if (!confirm("Delete this conversation? This can't be undone.")) return;
+  await fetch(`/conversations/${sheetTargetId}`, { method: "DELETE" });
+  closeActionSheet();
+  if (sheetTargetId === currentConversationId) {
+    currentConversationId = null;
+    renderedKey = "";
+    updateHeaderControls();
+    await fetchMessages();
+  }
+  await loadConversationList();
+});
+
+sheetEdit.addEventListener("click", async () => {
+  if (!sheetTargetId) return;
+  closeActionSheet();
+  try {
+    const res = await fetch(`/conversations/${sheetTargetId}/messages`);
+    if (!res.ok) return;
+    const conversation = await res.json();
+    editModal.dataset.targetId = sheetTargetId;
+    editName.value = conversation.name;
+    editPersonality.value = conversation.personality || "";
+    editModel.value = conversation.model;
+    editThinking.checked = Boolean(conversation.thinking);
+    updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+    editStatus.textContent = "";
+    editModalScrim.hidden = false;
+  } catch {
+    setStatus("Failed to load conversation.");
+  }
+});
+
+editModalScrim.addEventListener("click", (event) => {
+  if (event.target === editModalScrim) editModalScrim.hidden = true;
+});
+editCancel.addEventListener("click", () => {
+  editModalScrim.hidden = true;
+});
+editModal.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const targetId = editModal.dataset.targetId;
+  if (!targetId) return;
+  editStatus.textContent = "Saving...";
+  try {
+    const res = await fetch(`/conversations/${targetId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: editName.value.trim(),
+        personality: editPersonality.value.trim(),
+        model: editModel.value,
+        thinking: editThinkingRow.hidden ? false : editThinking.checked,
+      }),
+    });
+    if (!res.ok) {
+      editStatus.textContent = "Failed to save.";
+      return;
+    }
+    editModalScrim.hidden = true;
+    await loadConversationList();
+    updateHeaderControls();
+  } catch {
+    editStatus.textContent = "Failed to save.";
+  }
+});
+
+// --- New chat modal -------------------------------------------------------
+function openNewChatModal() {
+  closeDrawer();
+  newChatName.value = "";
+  newChatPersonality.value = "";
+  newChatThinking.checked = false;
+  newChatStatus.textContent = "";
+  newChatModalScrim.hidden = false;
+  newChatName.focus();
+}
+drawerNewChat.addEventListener("click", openNewChatModal);
+headerNewChatBtn.addEventListener("click", openNewChatModal);
+newChatModalScrim.addEventListener("click", (event) => {
+  if (event.target === newChatModalScrim) newChatModalScrim.hidden = true;
+});
+newChatCancel.addEventListener("click", () => {
+  newChatModalScrim.hidden = true;
+});
+newChatModal.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = newChatName.value.trim();
+  if (!name) return;
+  const personality = newChatPersonality.value.trim();
+  const model = newChatModel.value || undefined;
+  const thinking = newChatThinkingRow.hidden ? false : newChatThinking.checked;
+
+  newChatStatus.textContent = "Creating...";
+  try {
+    const res = await fetch("/conversations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, personality, model, thinking }),
+    });
+    if (!res.ok) {
+      newChatStatus.textContent = "Failed to create.";
+      return;
+    }
+    const { conversation } = await res.json();
+    newChatModalScrim.hidden = true;
+    await loadConversationList();
+    await switchConversation(conversation.id);
+  } catch {
+    newChatStatus.textContent = "Failed to create.";
+  }
+});
+
+// --- Personality templates (shared by both modals) ------------------------
+function renderTemplateRow(container, targetTextarea) {
+  container.innerHTML = "";
+  for (const template of PERSONALITY_TEMPLATES) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "template-chip";
+    chip.textContent = template.name;
+    chip.addEventListener("click", () => {
+      targetTextarea.value = template.text;
+    });
+    container.appendChild(chip);
+  }
+}
+renderTemplateRow(newChatTemplateRow, newChatPersonality);
+renderTemplateRow(editTemplateRow, editPersonality);
+
+// --- Model catalog --------------------------------------------------------
+function capabilityBadgeText(model) {
+  if (!model) return "";
+  const parts = [];
+  if (model.contextWindow) parts.push(model.contextWindow);
+  parts.push(model.supportsThinking ? "thinking-capable" : "no thinking");
+  return parts.join(" · ");
+}
+
+async function loadModelCatalog() {
+  try {
+    const res = await fetch("/models");
+    if (!res.ok) return;
+    const { models } = await res.json();
+    modelCatalogById = new Map(models.map((model) => [model.id, model]));
+
+    for (const select of [newChatModel, editModel]) {
+      select.innerHTML = "";
+      const groups = new Map();
+      for (const model of models) {
+        if (!groups.has(model.provider)) {
+          const group = document.createElement("optgroup");
+          group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
+          groups.set(model.provider, group);
+          select.appendChild(group);
+        }
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.label;
+        groups.get(model.provider).appendChild(option);
+      }
+    }
+
+    replyModel.innerHTML = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Conversation default";
+    replyModel.appendChild(defaultOption);
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label;
+      replyModel.appendChild(option);
+    }
+
+    updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
+    updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+  } catch {
+    // transient network hiccup — modals just won't have model options yet
+  }
+}
+
+function updateThinkingVisibility(select, row, checkbox, badgeEl) {
+  const model = modelCatalogById.get(select.value);
+  const supportsThinking = Boolean(model && model.supportsThinking);
+  row.hidden = !supportsThinking;
+  if (!supportsThinking) checkbox.checked = false;
+  if (badgeEl) badgeEl.textContent = capabilityBadgeText(model);
+}
+newChatModel.addEventListener("change", () =>
+  updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge),
+);
+editModel.addEventListener("change", () =>
+  updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge),
+);
+
+// --- Per-message model override popover ------------------------------------
+plusButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  modelPopover.hidden = !modelPopover.hidden;
+});
+document.addEventListener("click", (event) => {
+  if (!modelPopover.hidden && !modelPopover.contains(event.target) && event.target !== plusButton) {
+    modelPopover.hidden = true;
+  }
+});
+
+// --- Messages rendering -----------------------------------------------------
 let editingMessageId = null;
 let lastRenderedMessages = [];
 
@@ -201,7 +598,7 @@ function renderMessages(messages) {
     messagesEl.appendChild(empty);
   } else {
     messages.forEach((message, index) => {
-      messagesEl.appendChild(renderBubbleRow(message, index === messages.length - 1));
+      messagesEl.appendChild(renderMessageBlock(message, index === messages.length - 1));
     });
   }
   updateRetryBanner(messages);
@@ -209,42 +606,27 @@ function renderMessages(messages) {
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function renderBubbleRow(message, isLast) {
+function renderMessageBlock(message, isLast) {
   const mine = message.sender === MY_SENDER;
-  const row = document.createElement("div");
-  row.className = `bubble-row ${mine ? "mine" : "theirs"}`;
+  const block = document.createElement("div");
+  block.className = `msg-block ${mine ? "mine" : "theirs"}`;
 
-  const avatar = document.createElement("div");
-  avatar.className = "avatar";
-  const { color, initial } = avatarFor(message.sender);
-  avatar.style.background = color;
-  avatar.textContent = initial;
-  row.appendChild(avatar);
-
-  const wrap = document.createElement("div");
-  wrap.className = "bubble-wrap";
-
-  const bubble = document.createElement("div");
-  bubble.className = `bubble ${mine ? "mine" : "theirs"}`;
-
-  const meta = document.createElement("span");
-  meta.className = "meta";
-  const deliveredMark = mine ? " · ✓" : "";
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  const deliveredMark = mine ? " · sent" : "";
   const overrideMark = message.modelOverride ? ` · ${message.modelOverride.split(":")[1] || message.modelOverride}` : "";
   meta.textContent = `${message.sender} · ${formatTime(message.ts)}${deliveredMark}${overrideMark}`;
-  bubble.appendChild(meta);
+  block.appendChild(meta);
 
   if (editingMessageId === message.id) {
     const editArea = document.createElement("textarea");
+    editArea.className = "msg-edit-area";
     editArea.value = message.text;
-    editArea.rows = Math.min(6, Math.max(2, message.text.split("\n").length));
-    editArea.style.width = "100%";
-    editArea.style.font = "inherit";
-    bubble.appendChild(editArea);
-    wrap.appendChild(bubble);
+    editArea.rows = Math.min(8, Math.max(2, message.text.split("\n").length));
+    block.appendChild(editArea);
 
     const actions = document.createElement("div");
-    actions.className = "bubble-actions";
+    actions.className = "msg-actions";
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save & resend";
@@ -269,30 +651,29 @@ function renderBubbleRow(message, isLast) {
       renderMessages(lastRenderedMessages);
     });
     actions.append(save, cancel);
-    wrap.appendChild(actions);
-    row.appendChild(wrap);
-    return row;
+    block.appendChild(actions);
+    return block;
   }
 
   const body = document.createElement("div");
+  body.className = mine ? "msg-bubble mine" : "msg-plain";
   body.innerHTML = renderMarkdown(message.text);
-  bubble.appendChild(body);
-  wrap.appendChild(bubble);
+  block.appendChild(body);
 
   const actions = document.createElement("div");
-  actions.className = "bubble-actions";
+  actions.className = "msg-actions";
 
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
-  copyBtn.textContent = "Copy";
+  copyBtn.textContent = "⧉";
+  copyBtn.title = "Copy";
   copyBtn.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(message.text);
-      copyBtn.textContent = "Copied";
-      setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
+      copyBtn.textContent = "✓";
+      setTimeout(() => (copyBtn.textContent = "⧉"), 1200);
     } catch {
-      // clipboard permission denied or unavailable — no-op, button just
-      // doesn't confirm
+      // clipboard permission denied or unavailable — no-op
     }
   });
   actions.appendChild(copyBtn);
@@ -300,7 +681,7 @@ function renderBubbleRow(message, isLast) {
   if (mine) {
     const editBtn = document.createElement("button");
     editBtn.type = "button";
-    editBtn.textContent = "Edit";
+    editBtn.textContent = "✎";
     editBtn.title = "Edit and resend — removes any reply that followed";
     editBtn.addEventListener("click", () => {
       editingMessageId = message.id;
@@ -313,8 +694,8 @@ function renderBubbleRow(message, isLast) {
   if (!mine && isLast) {
     const regenBtn = document.createElement("button");
     regenBtn.type = "button";
-    regenBtn.textContent = "↻ Regenerate";
-    regenBtn.title = "Delete this reply so it gets regenerated";
+    regenBtn.textContent = "↻";
+    regenBtn.title = "Regenerate";
     regenBtn.addEventListener("click", async () => {
       await fetch(messageEndpoint(message.id), { method: "DELETE" });
       renderedKey = "";
@@ -325,7 +706,8 @@ function renderBubbleRow(message, isLast) {
 
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
-  deleteBtn.textContent = "Delete";
+  deleteBtn.textContent = "🗑";
+  deleteBtn.title = "Delete";
   deleteBtn.addEventListener("click", async () => {
     await fetch(messageEndpoint(message.id), { method: "DELETE" });
     renderedKey = "";
@@ -333,17 +715,16 @@ function renderBubbleRow(message, isLast) {
   });
   actions.appendChild(deleteBtn);
 
-  wrap.appendChild(actions);
-  row.appendChild(wrap);
-  return row;
+  block.appendChild(actions);
+  return block;
 }
 
-// --- "X is typing" + retry-with-a-different-provider (Feature-Ideas.md
-// #3, #31) — both are heuristics off the same signal (last message is
-// Edvard's, unanswered), not a real typing/error event from the runner,
-// which has no way to publish either today. Tracked as a single
-// "trailing status" element regardless of which of the two it currently
-// is, so every poll replaces it instead of appending a duplicate.
+// --- "Waiting for a reply" + retry-with-a-different-provider ---------------
+// Both are heuristics off the same signal (last message is Edvard's,
+// unanswered), not a real typing/error event from the runner, which has no
+// way to publish either today. Tracked as a single "trailing status"
+// element regardless of which of the two it currently is, so every poll
+// replaces it instead of appending a duplicate.
 let trailingStatusEl = null;
 function updateRetryBanner(messages) {
   if (trailingStatusEl) {
@@ -403,291 +784,6 @@ async function fetchMessages() {
   }
 }
 
-async function loadConversationList() {
-  try {
-    const res = await fetch("/conversations");
-    if (!res.ok) return;
-    const { conversations } = await res.json();
-    allConversations = conversations;
-    conversationSelect.innerHTML = "";
-    const mainOption = document.createElement("option");
-    mainOption.value = "";
-    mainOption.textContent = "Main";
-    conversationSelect.appendChild(mainOption);
-    // Archived conversations are hidden from the switcher, not deleted
-    // (Feature-Ideas.md #81) — still reachable via search or a direct link.
-    for (const conversation of conversations) {
-      if (conversation.archived) continue;
-      const option = document.createElement("option");
-      option.value = conversation.id;
-      option.textContent = conversation.name;
-      conversationSelect.appendChild(option);
-    }
-    conversationSelect.value = currentConversationId ?? "";
-    settingsToggle.disabled = !currentConversationId;
-  } catch {
-    // transient network hiccup — leave the switcher as-is
-  }
-}
-
-function capabilityBadgeText(model) {
-  if (!model) return "";
-  const parts = [];
-  if (model.contextWindow) parts.push(model.contextWindow);
-  parts.push(model.supportsThinking ? "thinking-capable" : "no thinking");
-  return parts.join(" · ");
-}
-
-async function loadModelCatalog() {
-  try {
-    const res = await fetch("/models");
-    if (!res.ok) return;
-    const { models } = await res.json();
-    modelCatalogById = new Map(models.map((model) => [model.id, model]));
-
-    for (const select of [newChatModel, settingsModel]) {
-      select.innerHTML = "";
-      const groups = new Map();
-      for (const model of models) {
-        if (!groups.has(model.provider)) {
-          const group = document.createElement("optgroup");
-          group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
-          groups.set(model.provider, group);
-          select.appendChild(group);
-        }
-        const option = document.createElement("option");
-        option.value = model.id;
-        option.textContent = model.label;
-        groups.get(model.provider).appendChild(option);
-      }
-    }
-
-    replyModel.innerHTML = "";
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "";
-    defaultOption.textContent = "Default model";
-    replyModel.appendChild(defaultOption);
-    for (const model of models) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = model.label;
-      replyModel.appendChild(option);
-    }
-
-    updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
-    updateThinkingVisibility(settingsModel, settingsThinkingRow, settingsThinking, settingsBadge);
-  } catch {
-    // transient network hiccup — forms just won't have model options yet
-  }
-}
-
-function updateThinkingVisibility(select, row, checkbox, badgeEl) {
-  const model = modelCatalogById.get(select.value);
-  const supportsThinking = Boolean(model && model.supportsThinking);
-  row.hidden = !supportsThinking;
-  if (!supportsThinking) checkbox.checked = false;
-  if (badgeEl) badgeEl.textContent = capabilityBadgeText(model);
-}
-
-newChatModel.addEventListener("change", () =>
-  updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge),
-);
-settingsModel.addEventListener("change", () =>
-  updateThinkingVisibility(settingsModel, settingsThinkingRow, settingsThinking, settingsBadge),
-);
-
-// --- Personality templates gallery ----------------------------------------
-for (const template of PERSONALITY_TEMPLATES) {
-  const chip = document.createElement("button");
-  chip.type = "button";
-  chip.className = "template-chip";
-  chip.textContent = template.name;
-  chip.addEventListener("click", () => {
-    newChatPersonality.value = template.text;
-  });
-  templateRow.appendChild(chip);
-}
-
-// --- Search (Feature-Ideas.md #77/#78) ------------------------------------
-let searchDebounce;
-searchToggle.addEventListener("click", () => {
-  searchPanel.hidden = !searchPanel.hidden;
-  if (!searchPanel.hidden) searchInput.focus();
-});
-searchInput.addEventListener("input", () => {
-  clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(runSearch, 250);
-});
-async function runSearch() {
-  const q = searchInput.value.trim();
-  searchResultsEl.innerHTML = "";
-  if (!q) return;
-  try {
-    const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
-    if (!res.ok) return;
-    const { results } = await res.json();
-    for (const result of results.slice(0, 50)) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "search-result";
-      const nameEl = document.createElement("div");
-      nameEl.className = "conv-name";
-      nameEl.textContent = result.conversationName;
-      const textEl = document.createElement("div");
-      textEl.textContent = result.message.text.slice(0, 140);
-      item.append(nameEl, textEl);
-      item.addEventListener("click", () => {
-        currentConversationId = result.conversationId;
-        conversationSelect.value = result.conversationId ?? "";
-        renderedKey = "";
-        searchPanel.hidden = true;
-        fetchMessages();
-        settingsToggle.disabled = !currentConversationId;
-      });
-      searchResultsEl.appendChild(item);
-    }
-  } catch {
-    // transient network hiccup — leave results as they were
-  }
-}
-
-conversationSelect.addEventListener("change", () => {
-  currentConversationId = conversationSelect.value || null;
-  editingMessageId = null;
-  renderedKey = "";
-  settingsToggle.disabled = !currentConversationId;
-  settingsForm.hidden = true;
-  fetchMessages();
-});
-
-// --- New conversation ------------------------------------------------------
-newChatToggle.addEventListener("click", () => {
-  settingsForm.hidden = true;
-  newChatForm.hidden = !newChatForm.hidden;
-  newChatStatus.textContent = "";
-  if (!newChatForm.hidden) newChatName.focus();
-});
-
-newChatCancel.addEventListener("click", () => {
-  newChatForm.hidden = true;
-  newChatName.value = "";
-  newChatPersonality.value = "";
-  newChatStatus.textContent = "";
-});
-
-newChatForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const name = newChatName.value.trim();
-  if (!name) return;
-  const personality = newChatPersonality.value.trim();
-  const model = newChatModel.value || undefined;
-  const thinking = newChatThinkingRow.hidden ? false : newChatThinking.checked;
-
-  newChatStatus.textContent = "Creating...";
-  try {
-    const res = await fetch("/conversations", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, personality, model, thinking }),
-    });
-    if (!res.ok) {
-      newChatStatus.textContent = "Failed to create.";
-      return;
-    }
-    const { conversation } = await res.json();
-    newChatName.value = "";
-    newChatPersonality.value = "";
-    newChatThinking.checked = false;
-    newChatForm.hidden = true;
-    await loadConversationList();
-    currentConversationId = conversation.id;
-    conversationSelect.value = conversation.id;
-    settingsToggle.disabled = false;
-    renderedKey = "";
-    fetchMessages();
-  } catch {
-    newChatStatus.textContent = "Failed to create.";
-  }
-});
-
-// --- Conversation settings (rename/edit personality/archive/delete) -------
-settingsToggle.addEventListener("click", async () => {
-  if (!currentConversationId) return;
-  newChatForm.hidden = true;
-  if (!settingsForm.hidden) {
-    settingsForm.hidden = true;
-    return;
-  }
-  try {
-    const res = await fetch(`/conversations/${currentConversationId}/messages`);
-    if (!res.ok) return;
-    const conversation = await res.json();
-    settingsName.value = conversation.name;
-    settingsPersonality.value = conversation.personality || "";
-    settingsModel.value = conversation.model;
-    settingsThinking.checked = Boolean(conversation.thinking);
-    settingsArchived.checked = Boolean(conversation.archived);
-    updateThinkingVisibility(settingsModel, settingsThinkingRow, settingsThinking, settingsBadge);
-    settingsStatus.textContent = "";
-    settingsForm.hidden = false;
-  } catch {
-    settingsStatus.textContent = "Failed to load conversation.";
-  }
-});
-
-settingsCancel.addEventListener("click", () => {
-  settingsForm.hidden = true;
-});
-
-settingsForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!currentConversationId) return;
-  settingsStatus.textContent = "Saving...";
-  try {
-    const res = await fetch(`/conversations/${currentConversationId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: settingsName.value.trim(),
-        personality: settingsPersonality.value.trim(),
-        model: settingsModel.value,
-        thinking: settingsThinkingRow.hidden ? false : settingsThinking.checked,
-        archived: settingsArchived.checked,
-      }),
-    });
-    if (!res.ok) {
-      settingsStatus.textContent = "Failed to save.";
-      return;
-    }
-    settingsForm.hidden = true;
-    if (settingsArchived.checked) {
-      currentConversationId = null;
-      renderedKey = "";
-    }
-    await loadConversationList();
-    conversationSelect.value = currentConversationId ?? "";
-    fetchMessages();
-  } catch {
-    settingsStatus.textContent = "Failed to save.";
-  }
-});
-
-settingsDelete.addEventListener("click", async () => {
-  if (!currentConversationId) return;
-  if (!confirm("Delete this conversation? This can't be undone.")) return;
-  try {
-    await fetch(`/conversations/${currentConversationId}`, { method: "DELETE" });
-    currentConversationId = null;
-    settingsForm.hidden = true;
-    renderedKey = "";
-    await loadConversationList();
-    conversationSelect.value = "";
-    fetchMessages();
-  } catch {
-    settingsStatus.textContent = "Failed to delete.";
-  }
-});
-
 async function subscribeToPush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
     setStatus("Push not supported here — chat still works.");
@@ -737,7 +833,7 @@ async function subscribeToPush() {
   setStatus(res.ok ? "" : "Failed to register for notifications.");
 }
 
-// --- Auto-growing textarea (Feature-Ideas.md #9) --------------------------
+// --- Auto-growing textarea ------------------------------------------------
 function autoGrow() {
   replyInput.style.height = "auto";
   replyInput.style.height = `${replyInput.scrollHeight}px`;
@@ -759,6 +855,7 @@ replyForm.addEventListener("submit", async (event) => {
   replyInput.value = "";
   autoGrow();
   replyModel.value = "";
+  modelPopover.hidden = true;
   replyInput.disabled = true;
   try {
     await fetch(replyEndpoint(), {
@@ -774,6 +871,7 @@ replyForm.addEventListener("submit", async (event) => {
   fetchMessages();
 });
 
+updateHeaderControls();
 fetchMessages();
 loadConversationList();
 loadModelCatalog();
