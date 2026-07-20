@@ -66,7 +66,8 @@
     }
     #new-chat-form[hidden] { display: none; }
     #new-chat-form input,
-    #new-chat-form textarea {
+    #new-chat-form textarea,
+    #new-chat-form select {
       border-radius: 0.7rem;
       border: 1px solid #333;
       background: #1a1b1e;
@@ -76,6 +77,22 @@
       font-size: 0.9rem;
       resize: none;
     }
+    .new-chat-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    #new-chat-model { flex: 1; min-width: 0; }
+    .new-chat-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.85rem;
+      color: #c7c8cc;
+      white-space: nowrap;
+    }
+    .new-chat-checkbox[hidden] { display: none; }
+    .new-chat-checkbox input { width: 1rem; height: 1rem; }
     #new-chat-form .new-chat-actions {
       display: flex;
       justify-content: flex-end;
@@ -168,6 +185,13 @@
   <form id="new-chat-form" hidden>
     <input id="new-chat-name" type="text" placeholder="Name (e.g. Marcus)" required />
     <textarea id="new-chat-personality" placeholder="Personality / system prompt (optional)..." rows="2"></textarea>
+    <div class="new-chat-row">
+      <select id="new-chat-model"></select>
+      <label id="new-chat-thinking-row" class="new-chat-checkbox">
+        <input type="checkbox" id="new-chat-thinking" />
+        Thinking
+      </label>
+    </div>
     <p id="new-chat-status"></p>
     <div class="new-chat-actions">
       <button type="button" id="new-chat-cancel">Cancel</button>

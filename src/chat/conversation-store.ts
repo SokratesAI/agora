@@ -13,11 +13,26 @@ export interface Conversation {
   id: string;
   name: string;
   personality: string;
+  /** "<provider>:<model id>", e.g. "anthropic:claude-haiku-4-5-20251001". */
+  model: string;
+  thinking: boolean;
   createdAt: string;
   messages: Message[];
 }
 
 export type ConversationSummary = Omit<Conversation, "messages">;
+
+export interface ConversationUpdate {
+  name?: string;
+  personality?: string;
+  model?: string;
+  thinking?: boolean;
+}
+
+// Applied to conversations created before model/thinking existed — keeps
+// old records loadable without a migration step.
+export const DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001";
+export const DEFAULT_THINKING = false;
 
 /**
  * One file per conversation under a dedicated subdirectory, same atomic-write
@@ -70,11 +85,18 @@ export class ConversationStore {
     return match ? this.get(match.id) : null;
   }
 
-  async create(name: string, personality: string): Promise<Conversation> {
+  async create(
+    name: string,
+    personality: string,
+    model: string = DEFAULT_MODEL,
+    thinking: boolean = DEFAULT_THINKING,
+  ): Promise<Conversation> {
     const conversation: Conversation = {
       id: randomUUID(),
       name,
       personality,
+      model,
+      thinking,
       createdAt: new Date().toISOString(),
       messages: [],
     };
@@ -89,6 +111,24 @@ export class ConversationStore {
     return write;
   }
 
+  /** Partial update — only the fields present in `updates` change. Used by
+   * the PATCH route (a human editing a conversation's settings later) and
+   * to backfill model/thinking on conversations created before those
+   * fields existed. */
+  async update(id: string, updates: ConversationUpdate): Promise<Conversation | null> {
+    const write = this.writeQueue.then(() => this.updateWith(id, updates));
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  private async updateWith(id: string, updates: ConversationUpdate): Promise<Conversation | null> {
+    const conversation = await this.get(id);
+    if (!conversation) return null;
+    Object.assign(conversation, updates);
+    await this.writeFile(conversation);
+    return conversation;
+  }
+
   private async appendWith(id: string, message: Message): Promise<Message | null> {
     const conversation = await this.get(id);
     if (!conversation) return null;
@@ -100,7 +140,10 @@ export class ConversationStore {
   private async readFile(filePath: string): Promise<Conversation | null> {
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      return JSON.parse(raw) as Conversation;
+      const conversation = JSON.parse(raw) as Conversation;
+      conversation.model ??= DEFAULT_MODEL;
+      conversation.thinking ??= DEFAULT_THINKING;
+      return conversation;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;

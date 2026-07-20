@@ -186,6 +186,61 @@ describe("agora public app", () => {
     const res = await request(app).post("/conversations").send({});
     expect(res.status).toBe(400);
   });
+
+  it("POST /conversations accepts a valid model and thinking flag", async () => {
+    const res = await request(app)
+      .post("/conversations")
+      .send({ name: "Gemini", model: "gemini:gemini-flash-latest", thinking: true });
+    expect(res.status).toBe(201);
+    expect(res.body.conversation).toMatchObject({
+      model: "gemini:gemini-flash-latest",
+      thinking: true,
+    });
+  });
+
+  it("POST /conversations rejects an unknown model", async () => {
+    const res = await request(app).post("/conversations").send({ name: "Bad", model: "nope:nope" });
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /models returns the model catalog", async () => {
+    const res = await request(app).get("/models");
+    expect(res.status).toBe(200);
+    expect(res.body.models.length).toBeGreaterThan(0);
+    expect(res.body.models[0]).toHaveProperty("id");
+    expect(res.body.models[0]).toHaveProperty("provider");
+    expect(res.body.models[0]).toHaveProperty("supportsThinking");
+  });
+
+  it("GET /conversations/:id/messages includes model and thinking", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app).get(`/conversations/${conversation.id}/messages`);
+    expect(res.body).toMatchObject({ model: conversation.model, thinking: conversation.thinking });
+  });
+
+  it("PATCH /conversations/:id updates only the given fields", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app)
+      .patch(`/conversations/${conversation.id}`)
+      .send({ model: "anthropic:claude-sonnet-5", thinking: true });
+    expect(res.status).toBe(200);
+    expect(res.body.conversation).toMatchObject({
+      name: "Haiku",
+      model: "anthropic:claude-sonnet-5",
+      thinking: true,
+    });
+  });
+
+  it("PATCH /conversations/:id 404s for an unknown id", async () => {
+    const res = await request(app).patch("/conversations/nope").send({ model: "anthropic:claude-sonnet-5" });
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /conversations/:id rejects an unknown model", async () => {
+    const conversation = await conversations.create("Haiku", "a helpful persona");
+    const res = await request(app).patch(`/conversations/${conversation.id}`).send({ model: "nope:nope" });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("agora internal app", () => {
@@ -275,7 +330,11 @@ describe("agora internal app", () => {
     expect(res.status).toBe(200);
     expect(webPush.sendNotification).toHaveBeenCalledWith(
       validSubscription,
-      JSON.stringify({ title: "Haiku", body: "hi" }),
+      JSON.stringify({
+        title: "Haiku",
+        body: "hi",
+        conversationId: created.body.conversation.id,
+      }),
     );
     expect(res.body.message).toMatchObject({ sender: "Haiku", text: "hi" });
   });
@@ -291,5 +350,14 @@ describe("agora internal app", () => {
       .post(`/conversations/${created.body.conversation.id}/notify`)
       .send({});
     expect(res.status).toBe(400);
+  });
+
+  it("PATCH /conversations/:id is also mounted internally (used to backfill model/thinking)", async () => {
+    const created = await request(app).post("/conversations").send({ name: "Haiku" });
+    const res = await request(app)
+      .patch(`/conversations/${created.body.conversation.id}`)
+      .send({ model: "anthropic:claude-sonnet-5" });
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.model).toBe("anthropic:claude-sonnet-5");
   });
 });
