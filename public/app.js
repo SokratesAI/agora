@@ -39,6 +39,13 @@ const sheetEdit = document.getElementById("sheet-edit");
 const sheetArchive = document.getElementById("sheet-archive");
 const sheetArchiveLabel = document.getElementById("sheet-archive-label");
 const sheetDelete = document.getElementById("sheet-delete");
+const sheetMainModel = document.getElementById("sheet-main-model");
+
+const mainModelModalScrim = document.getElementById("main-model-modal-scrim");
+const mainModelModal = document.getElementById("main-model-modal");
+const mainModelSelect = document.getElementById("main-model-select");
+const mainModelStatus = document.getElementById("main-model-status");
+const mainModelCancel = document.getElementById("main-model-cancel");
 
 const editModalScrim = document.getElementById("edit-modal-scrim");
 const editModal = document.getElementById("edit-modal");
@@ -64,11 +71,23 @@ const newChatThinking = document.getElementById("new-chat-thinking");
 const newChatStatus = document.getElementById("new-chat-status");
 const newChatCancel = document.getElementById("new-chat-cancel");
 
+const msgActionSheetScrim = document.getElementById("msg-action-sheet-scrim");
+const msgActionSheet = document.getElementById("msg-action-sheet");
+const msgSheetCopy = document.getElementById("msg-sheet-copy");
+const msgSheetEdit = document.getElementById("msg-sheet-edit");
+const msgSheetRegen = document.getElementById("msg-sheet-regen");
+const msgSheetFork = document.getElementById("msg-sheet-fork");
+const msgSheetDelete = document.getElementById("msg-sheet-delete");
+
 const replyForm = document.getElementById("reply-form");
 const replyInput = document.getElementById("reply-text");
-const replyModel = document.getElementById("reply-model");
 const plusButton = document.getElementById("plus-button");
-const modelPopover = document.getElementById("model-popover");
+const attachFileInput = document.getElementById("attach-file-input");
+const attachChipRow = document.getElementById("attach-chip-row");
+const attachMenu = document.getElementById("attach-menu");
+const attachMenuCamera = document.getElementById("attach-menu-camera");
+const attachMenuPhotos = document.getElementById("attach-menu-photos");
+const attachMenuFiles = document.getElementById("attach-menu-files");
 
 // null = the original global thread ("Main" in the drawer). A string id
 // means a conversation created via POST /conversations. Seeded from the
@@ -260,10 +279,8 @@ function renderDrawerList(conversations) {
 function updateHeaderControls() {
   if (!currentConversationId) {
     headerTitle.textContent = "Main";
-    headerOverflowBtn.style.opacity = "0.35";
     return;
   }
-  headerOverflowBtn.style.opacity = "1";
   const known = allConversations.find((c) => c.id === currentConversationId);
   if (known) headerTitle.textContent = known.name;
 }
@@ -329,11 +346,21 @@ async function runSearch(q) {
 }
 
 // --- Action sheet -------------------------------------------------------
+// id === null means "Main" — the legacy global thread has no backend
+// conversation record, so rename/archive/delete don't apply to it; it only
+// gets the default-model row instead of the usual three.
 function openActionSheet(id, name) {
   sheetTargetId = id;
   actionSheetTitle.textContent = name;
-  const conversation = allConversations.find((c) => c.id === id);
-  sheetArchiveLabel.textContent = conversation && conversation.archived ? "Unarchive" : "Archive";
+  const isMain = id === null;
+  sheetEdit.hidden = isMain;
+  sheetArchive.hidden = isMain;
+  sheetDelete.hidden = isMain;
+  sheetMainModel.hidden = !isMain;
+  if (!isMain) {
+    const conversation = allConversations.find((c) => c.id === id);
+    sheetArchiveLabel.textContent = conversation && conversation.archived ? "Unarchive" : "Archive";
+  }
   actionSheetScrim.hidden = false;
 }
 function closeActionSheet() {
@@ -343,7 +370,6 @@ actionSheetScrim.addEventListener("click", (event) => {
   if (event.target === actionSheetScrim) closeActionSheet();
 });
 headerOverflowBtn.addEventListener("click", () => {
-  if (!currentConversationId) return;
   openActionSheet(currentConversationId, headerTitle.textContent);
 });
 
@@ -434,6 +460,38 @@ editModal.addEventListener("submit", async (event) => {
   }
 });
 
+// --- Main's default model (localStorage-backed — Main has no backend
+// conversation record to store a model field on, unlike named conversations,
+// so this is the client-side equivalent of that field for the legacy
+// thread). Read by the replyForm submit handler further down. ---------------
+const MAIN_DEFAULT_MODEL_KEY = "agora-main-default-model";
+function getMainDefaultModel() {
+  const stored = localStorage.getItem(MAIN_DEFAULT_MODEL_KEY);
+  // Guard against a stale id from a model that's since been removed from
+  // MODEL_CATALOG — sending an unknown id would 400 the whole /reply call.
+  return stored && modelCatalogById.has(stored) ? stored : undefined;
+}
+
+sheetMainModel.addEventListener("click", () => {
+  closeActionSheet();
+  populateModelSelect(mainModelSelect, latestModelList);
+  const current = getMainDefaultModel();
+  if (current) mainModelSelect.value = current;
+  mainModelStatus.textContent = "";
+  mainModelModalScrim.hidden = false;
+});
+mainModelModalScrim.addEventListener("click", (event) => {
+  if (event.target === mainModelModalScrim) mainModelModalScrim.hidden = true;
+});
+mainModelCancel.addEventListener("click", () => {
+  mainModelModalScrim.hidden = true;
+});
+mainModelModal.addEventListener("submit", (event) => {
+  event.preventDefault();
+  localStorage.setItem(MAIN_DEFAULT_MODEL_KEY, mainModelSelect.value);
+  mainModelModalScrim.hidden = true;
+});
+
 // --- New chat modal -------------------------------------------------------
 function openNewChatModal() {
   closeDrawer();
@@ -506,40 +564,34 @@ function capabilityBadgeText(model) {
   return parts.join(" · ");
 }
 
+function populateModelSelect(select, models) {
+  select.innerHTML = "";
+  const groups = new Map();
+  for (const model of models) {
+    if (!groups.has(model.provider)) {
+      const group = document.createElement("optgroup");
+      group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
+      groups.set(model.provider, group);
+      select.appendChild(group);
+    }
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.label;
+    groups.get(model.provider).appendChild(option);
+  }
+}
+
+let latestModelList = [];
 async function loadModelCatalog() {
   try {
     const res = await fetch("/models");
     if (!res.ok) return;
     const { models } = await res.json();
     modelCatalogById = new Map(models.map((model) => [model.id, model]));
+    latestModelList = models;
 
     for (const select of [newChatModel, editModel]) {
-      select.innerHTML = "";
-      const groups = new Map();
-      for (const model of models) {
-        if (!groups.has(model.provider)) {
-          const group = document.createElement("optgroup");
-          group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
-          groups.set(model.provider, group);
-          select.appendChild(group);
-        }
-        const option = document.createElement("option");
-        option.value = model.id;
-        option.textContent = model.label;
-        groups.get(model.provider).appendChild(option);
-      }
-    }
-
-    replyModel.innerHTML = "";
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "";
-    defaultOption.textContent = "Conversation default";
-    replyModel.appendChild(defaultOption);
-    for (const model of models) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = model.label;
-      replyModel.appendChild(option);
+      populateModelSelect(select, models);
     }
 
     updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
@@ -563,16 +615,62 @@ editModel.addEventListener("change", () =>
   updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge),
 );
 
-// --- Per-message model override popover ------------------------------------
+// --- Attach files (UI-only — no upload endpoint exists yet, see the submit
+// handler below) ------------------------------------------------------------
+let stagedFiles = [];
+
 plusButton.addEventListener("click", (event) => {
   event.stopPropagation();
-  modelPopover.hidden = !modelPopover.hidden;
+  attachMenu.hidden = !attachMenu.hidden;
 });
 document.addEventListener("click", (event) => {
-  if (!modelPopover.hidden && !modelPopover.contains(event.target) && event.target !== plusButton) {
-    modelPopover.hidden = true;
+  if (!attachMenu.hidden && !attachMenu.contains(event.target) && event.target !== plusButton) {
+    attachMenu.hidden = true;
   }
 });
+
+// One shared file input, reconfigured per row rather than three separate
+// inputs — capture/accept only matter at the moment .click() opens the
+// native picker, so setting them just before that is enough.
+function openFilePicker({ accept = "", capture = "" } = {}) {
+  attachFileInput.accept = accept;
+  if (capture) attachFileInput.setAttribute("capture", capture);
+  else attachFileInput.removeAttribute("capture");
+  attachMenu.hidden = true;
+  attachFileInput.click();
+}
+attachMenuCamera.addEventListener("click", () => openFilePicker({ accept: "image/*", capture: "environment" }));
+attachMenuPhotos.addEventListener("click", () => openFilePicker({ accept: "image/*" }));
+attachMenuFiles.addEventListener("click", () => openFilePicker());
+
+attachFileInput.addEventListener("change", () => {
+  stagedFiles.push(...attachFileInput.files);
+  attachFileInput.value = ""; // allow re-selecting the same filename later
+  renderAttachChips();
+});
+
+function renderAttachChips() {
+  attachChipRow.innerHTML = "";
+  attachChipRow.hidden = stagedFiles.length === 0;
+  stagedFiles.forEach((file, index) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    const name = document.createElement("span");
+    name.className = "attach-chip-name";
+    name.textContent = file.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attach-chip-remove";
+    remove.textContent = "✕";
+    remove.title = "Remove";
+    remove.addEventListener("click", () => {
+      stagedFiles.splice(index, 1);
+      renderAttachChips();
+    });
+    chip.append(name, remove);
+    attachChipRow.appendChild(chip);
+  });
+}
 
 // --- Messages rendering -----------------------------------------------------
 let editingMessageId = null;
@@ -626,7 +724,7 @@ function renderMessageBlock(message, isLast) {
     block.appendChild(editArea);
 
     const actions = document.createElement("div");
-    actions.className = "msg-actions";
+    actions.className = "msg-edit-actions";
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save & resend";
@@ -659,65 +757,132 @@ function renderMessageBlock(message, isLast) {
   body.className = mine ? "msg-bubble mine" : "msg-plain";
   body.innerHTML = renderMarkdown(message.text);
   block.appendChild(body);
+  attachLongPress(body, message, mine, isLast);
 
-  const actions = document.createElement("div");
-  actions.className = "msg-actions";
-
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.textContent = "⧉";
-  copyBtn.title = "Copy";
-  copyBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(message.text);
-      copyBtn.textContent = "✓";
-      setTimeout(() => (copyBtn.textContent = "⧉"), 1200);
-    } catch {
-      // clipboard permission denied or unavailable — no-op
-    }
-  });
-  actions.appendChild(copyBtn);
-
-  if (mine) {
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.textContent = "✎";
-    editBtn.title = "Edit and resend — removes any reply that followed";
-    editBtn.addEventListener("click", () => {
-      editingMessageId = message.id;
-      renderedKey = "";
-      renderMessages(lastRenderedMessages);
-    });
-    actions.appendChild(editBtn);
-  }
-
-  if (!mine && isLast) {
-    const regenBtn = document.createElement("button");
-    regenBtn.type = "button";
-    regenBtn.textContent = "↻";
-    regenBtn.title = "Regenerate";
-    regenBtn.addEventListener("click", async () => {
-      await fetch(messageEndpoint(message.id), { method: "DELETE" });
-      renderedKey = "";
-      fetchMessages();
-    });
-    actions.appendChild(regenBtn);
-  }
-
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.textContent = "🗑";
-  deleteBtn.title = "Delete";
-  deleteBtn.addEventListener("click", async () => {
-    await fetch(messageEndpoint(message.id), { method: "DELETE" });
-    renderedKey = "";
-    fetchMessages();
-  });
-  actions.appendChild(deleteBtn);
-
-  block.appendChild(actions);
   return block;
 }
+
+// --- Long-press message action sheet ----------------------------------------
+// Replaces the old always-visible copy/edit/regenerate/delete icon row —
+// hold a message for 2s to get the same actions (plus Fork) as a bottom
+// sheet, matching the ChatGPT/Gemini mobile pattern. Pointer Events cover
+// touch + mouse + pen uniformly, no separate code paths needed.
+const LONG_PRESS_MS = 2000;
+const LONG_PRESS_MOVE_TOLERANCE = 10; // px — beyond this, treat it as a scroll/drag, not a hold
+let longPressTimer = null;
+let longPressStartPos = null;
+let messageActionTarget = null; // the message object the open sheet applies to
+
+function attachLongPress(el, message, mine, isLast) {
+  const start = (event) => {
+    if (event.button !== undefined && event.button !== 0) return; // primary button/touch only
+    longPressStartPos = { x: event.clientX, y: event.clientY };
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      openMessageActionSheet(message, mine, isLast, el);
+    }, LONG_PRESS_MS);
+  };
+  const cancel = () => {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    longPressStartPos = null;
+  };
+  const move = (event) => {
+    if (!longPressStartPos) return;
+    const dx = event.clientX - longPressStartPos.x;
+    const dy = event.clientY - longPressStartPos.y;
+    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOLERANCE) cancel();
+  };
+  el.addEventListener("pointerdown", start);
+  el.addEventListener("pointerup", cancel);
+  el.addEventListener("pointercancel", cancel);
+  el.addEventListener("pointerleave", cancel);
+  el.addEventListener("pointermove", move);
+  // A hold that fired the sheet shouldn't also pop a native context menu.
+  el.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
+// Positions a floating menu card near wherever it was triggered from
+// (the long-pressed message) rather than a fixed spot — mirrors the
+// ChatGPT mobile reference, where these menus appear anchored to their
+// trigger. Clamped to the viewport so it can't render off-screen near an
+// edge, and flips above the anchor if there's no room below.
+function positionFloatingSheet(sheetEl, anchorRect) {
+  const margin = 8;
+  const sheetRect = sheetEl.getBoundingClientRect();
+  let left = anchorRect.left;
+  if (left + sheetRect.width + margin > window.innerWidth) left = window.innerWidth - sheetRect.width - margin;
+  if (left < margin) left = margin;
+  let top = anchorRect.bottom + 8;
+  if (top + sheetRect.height + margin > window.innerHeight) top = anchorRect.top - sheetRect.height - 8;
+  if (top < margin) top = margin;
+  sheetEl.style.top = `${top}px`;
+  sheetEl.style.left = `${left}px`;
+}
+
+function openMessageActionSheet(message, mine, isLast, anchorEl) {
+  messageActionTarget = message;
+  msgSheetEdit.hidden = !mine;
+  msgSheetRegen.hidden = mine || !isLast;
+  msgActionSheetScrim.hidden = false;
+  positionFloatingSheet(msgActionSheet, anchorEl.getBoundingClientRect());
+}
+function closeMessageActionSheet() {
+  msgActionSheetScrim.hidden = true;
+  messageActionTarget = null;
+}
+msgActionSheetScrim.addEventListener("click", (event) => {
+  if (event.target === msgActionSheetScrim) closeMessageActionSheet();
+});
+
+msgSheetCopy.addEventListener("click", async () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message) return;
+  try {
+    await navigator.clipboard.writeText(message.text);
+    setStatus("Copied.");
+  } catch {
+    // clipboard permission denied or unavailable — no-op
+  }
+});
+
+msgSheetEdit.addEventListener("click", () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message) return;
+  editingMessageId = message.id;
+  renderedKey = "";
+  renderMessages(lastRenderedMessages);
+});
+
+msgSheetRegen.addEventListener("click", async () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message) return;
+  await fetch(messageEndpoint(message.id), { method: "DELETE" });
+  renderedKey = "";
+  fetchMessages();
+});
+
+// Not implemented on the backend — no /fork route or branching data model
+// exists yet. Surfaced as a real row rather than hidden so it's
+// discoverable, but it's a stub until that's built (cf. RETRY_OFFER_MS
+// above for the same "stub with a clear comment" convention).
+msgSheetFork.addEventListener("click", () => {
+  closeMessageActionSheet();
+  setStatus("Fork isn't built yet.");
+});
+
+msgSheetDelete.addEventListener("click", async () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message) return;
+  await fetch(messageEndpoint(message.id), { method: "DELETE" });
+  renderedKey = "";
+  fetchMessages();
+});
 
 // --- "Waiting for a reply" + retry-with-a-different-provider ---------------
 // Both are heuristics off the same signal (last message is Edvard's,
@@ -851,11 +1016,12 @@ replyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = replyInput.value.trim();
   if (!text) return;
-  const model = replyModel.value || undefined;
+  const model = currentConversationId ? undefined : getMainDefaultModel();
+  const hadStagedFiles = stagedFiles.length > 0;
   replyInput.value = "";
   autoGrow();
-  replyModel.value = "";
-  modelPopover.hidden = true;
+  stagedFiles = [];
+  renderAttachChips();
   replyInput.disabled = true;
   try {
     await fetch(replyEndpoint(), {
@@ -863,6 +1029,10 @@ replyForm.addEventListener("submit", async (event) => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, model }),
     });
+    // No attachment upload route exists yet — staged files are UI-only for
+    // now, so say so explicitly rather than silently dropping what was
+    // attached.
+    if (hadStagedFiles) setStatus("File attachments aren't wired up yet — sent as text only.");
   } finally {
     replyInput.disabled = false;
     replyInput.focus();
