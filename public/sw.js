@@ -16,7 +16,16 @@ self.addEventListener("push", (event) => {
       self.registration.showNotification(data.title || "Agora", {
         body: data.body || "",
         icon: "/icon.svg",
+        // Carried through to notificationclick below via
+        // event.notification.data — not available any other way since the
+        // two events are otherwise unrelated as far as the Notification API
+        // is concerned.
+        data: { conversationId: data.conversationId || null },
       }),
+      // Background refresh only (no conversation switch) — a message
+      // arriving for a conversation Edvard isn't looking at shouldn't yank
+      // the view away from what he's currently reading. Switching only
+      // happens on an explicit tap, see notificationclick below.
       self.clients.matchAll({ type: "window" }).then((clients) => {
         for (const client of clients) client.postMessage({ type: "agora-push" });
       }),
@@ -26,12 +35,17 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const conversationId = event.notification.data && event.notification.data.conversationId;
   event.waitUntil(
     self.clients.matchAll({ type: "window" }).then((clients) => {
       for (const client of clients) {
-        if ("focus" in client) return client.focus();
+        if ("focus" in client) {
+          client.postMessage({ type: "agora-push", conversationId });
+          return client.focus();
+        }
       }
-      return self.clients.openWindow("/");
+      const url = conversationId ? `/?conversation=${encodeURIComponent(conversationId)}` : "/";
+      return self.clients.openWindow(url);
     }),
   );
 });

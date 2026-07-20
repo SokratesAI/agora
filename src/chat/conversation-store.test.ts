@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { ConversationStore } from "./conversation-store.js";
+import { ConversationStore, DEFAULT_MODEL, DEFAULT_THINKING } from "./conversation-store.js";
 
 describe("ConversationStore", () => {
   let dir: string;
@@ -17,14 +17,38 @@ describe("ConversationStore", () => {
     expect(await store.list()).toEqual([]);
   });
 
-  it("creates a conversation with an id, name, and personality", async () => {
+  it("creates a conversation with an id, name, and personality, defaulting model/thinking", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);
     const conversation = await store.create("Haiku", "You are a helpful assistant.");
     expect(conversation.id).toBeTruthy();
     expect(conversation.name).toBe("Haiku");
     expect(conversation.personality).toBe("You are a helpful assistant.");
+    expect(conversation.model).toBe(DEFAULT_MODEL);
+    expect(conversation.thinking).toBe(DEFAULT_THINKING);
     expect(conversation.messages).toEqual([]);
+  });
+
+  it("creates a conversation with an explicit model and thinking", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Gemini", "persona", "gemini:gemini-flash-latest", true);
+    expect(conversation.model).toBe("gemini:gemini-flash-latest");
+    expect(conversation.thinking).toBe(true);
+  });
+
+  it("backfills model/thinking defaults when reading a pre-existing file that lacks them", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    // Simulate a conversation file written before model/thinking existed.
+    const filePath = path.join(dir, "conversations", `${conversation.id}.json`);
+    const { model: _model, thinking: _thinking, ...withoutNewFields } = conversation;
+    await fs.writeFile(filePath, JSON.stringify(withoutNewFields));
+
+    const reloaded = await store.get(conversation.id);
+    expect(reloaded?.model).toBe(DEFAULT_MODEL);
+    expect(reloaded?.thinking).toBe(DEFAULT_THINKING);
   });
 
   it("lists conversation summaries without messages", async () => {
@@ -77,5 +101,31 @@ describe("ConversationStore", () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);
     expect(await store.appendMessage("nope", "Edvard", "hi")).toBeNull();
+  });
+
+  it("updates only the fields given", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    const updated = await store.update(conversation.id, { model: "gemini:gemini-flash-latest" });
+    expect(updated?.model).toBe("gemini:gemini-flash-latest");
+    expect(updated?.name).toBe("Haiku");
+    expect(updated?.personality).toBe("persona a");
+  });
+
+  it("update persists across a fresh read", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    await store.update(conversation.id, { thinking: true, personality: "new persona" });
+    const reloaded = await store.get(conversation.id);
+    expect(reloaded?.thinking).toBe(true);
+    expect(reloaded?.personality).toBe("new persona");
+  });
+
+  it("returns null when updating a conversation that doesn't exist", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    expect(await store.update("nope", { model: "x" })).toBeNull();
   });
 });

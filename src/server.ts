@@ -3,13 +3,16 @@ import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
 import type { MessageStore } from "./chat/message-store.js";
-import type { ConversationStore } from "./chat/conversation-store.js";
+import type { ConversationStore, ConversationUpdate } from "./chat/conversation-store.js";
+import { MODEL_CATALOG } from "./models.js";
 import {
   notificationsSent,
   notificationsFailed,
   repliesReceived,
   subscriptionsRegistered,
 } from "./metrics.js";
+
+const VALID_MODEL_IDS = new Set(MODEL_CATALOG.map((m) => m.id));
 
 export interface WebPushSender {
   sendNotification(
@@ -46,9 +49,18 @@ function isValidSubscription(body: unknown): body is PushSubscriptionRecord {
  */
 function registerCreateConversationRoute(app: Express, conversations: ConversationStore): void {
   app.post("/conversations", async (req, res) => {
-    const { name, personality } = req.body as { name?: unknown; personality?: unknown };
+    const { name, personality, model, thinking } = req.body as {
+      name?: unknown;
+      personality?: unknown;
+      model?: unknown;
+      thinking?: unknown;
+    };
     if (typeof name !== "string" || name.length === 0) {
       res.status(400).json({ error: "name is required" });
+      return;
+    }
+    if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
+      res.status(400).json({ error: "unknown model" });
       return;
     }
     const existing = await conversations.findByName(name);
@@ -59,8 +71,40 @@ function registerCreateConversationRoute(app: Express, conversations: Conversati
     const conversation = await conversations.create(
       name,
       typeof personality === "string" ? personality : "",
+      typeof model === "string" ? model : undefined,
+      typeof thinking === "boolean" ? thinking : undefined,
     );
     res.status(201).json({ status: "created", conversation });
+  });
+}
+
+/** Edit an existing conversation's settings (name/personality/model/thinking)
+ * later, or backfill model/thinking on a conversation created before those
+ * fields existed — see conversation-store.ts's readFile() defaulting. */
+function registerUpdateConversationRoute(app: Express, conversations: ConversationStore): void {
+  app.patch("/conversations/:id", async (req, res) => {
+    const { name, personality, model, thinking } = req.body as {
+      name?: unknown;
+      personality?: unknown;
+      model?: unknown;
+      thinking?: unknown;
+    };
+    if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
+      res.status(400).json({ error: "unknown model" });
+      return;
+    }
+    const updates: ConversationUpdate = {};
+    if (typeof name === "string") updates.name = name;
+    if (typeof personality === "string") updates.personality = personality;
+    if (typeof model === "string") updates.model = model;
+    if (typeof thinking === "boolean") updates.thinking = thinking;
+
+    const conversation = await conversations.update(req.params.id, updates);
+    if (!conversation) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    res.status(200).json({ status: "updated", conversation });
   });
 }
 
@@ -137,6 +181,15 @@ export function createPublicApp({
   // first slice: conversations as first-class objects a persona can be
   // driven by, proven with agora-haiku-poc before any UI is built for it.
   registerCreateConversationRoute(app, conversations);
+  registerUpdateConversationRoute(app, conversations);
+
+  // Static — doesn't depend on which provider API keys are actually
+  // mounted anywhere; a persona-runner that can't reach a given provider
+  // fails loudly in its own logs rather than this endpoint trying to
+  // reflect live availability.
+  app.get("/models", (_req, res) => {
+    res.status(200).json({ models: MODEL_CATALOG });
+  });
 
   app.get("/conversations", async (_req, res) => {
     res.status(200).json({ conversations: await conversations.list() });
@@ -152,6 +205,8 @@ export function createPublicApp({
       id: conversation.id,
       name: conversation.name,
       personality: conversation.personality,
+      model: conversation.model,
+      thinking: conversation.thinking,
       messages: conversation.messages,
     });
   });
@@ -196,6 +251,7 @@ export function createInternalApp({
   // conversation id without depending on the public port being reachable
   // from inside the cluster.
   registerCreateConversationRoute(app, conversations);
+  registerUpdateConversationRoute(app, conversations);
 
   app.post("/conversations/:id/notify", async (req, res) => {
     const { text } = req.body as { text?: unknown };
@@ -216,9 +272,12 @@ export function createInternalApp({
       return;
     }
     try {
+      // conversationId lets the service worker route a tapped notification
+      // straight to this conversation instead of defaulting to Main — see
+      // sw.js/app.js.
       await webPush.sendNotification(
         subscription,
-        JSON.stringify({ title: conversation.name, body: text }),
+        JSON.stringify({ title: conversation.name, body: text, conversationId: conversation.id }),
       );
       notificationsSent.add(1, { persona: conversation.name });
       res.status(200).json({ status: "sent", message });
