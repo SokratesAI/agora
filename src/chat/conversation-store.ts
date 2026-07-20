@@ -7,6 +7,11 @@ export interface Message {
   sender: string;
   text: string;
   ts: string;
+  /** "<provider>:<model id>" — set only when Edvard picked a different
+   * model than the conversation's default for this one message (Phase 5's
+   * per-message override). The runner uses it for just this reply, never
+   * persists it back onto the conversation's own `model` field. */
+  modelOverride?: string;
 }
 
 export interface Conversation {
@@ -16,23 +21,38 @@ export interface Conversation {
   /** "<provider>:<model id>", e.g. "anthropic:claude-haiku-4-5-20251001". */
   model: string;
   thinking: boolean;
+  /** Hidden from the default switcher view, not deleted — Phase 5's
+   * archive action. */
+  archived: boolean;
   createdAt: string;
   messages: Message[];
 }
 
-export type ConversationSummary = Omit<Conversation, "messages">;
+export type ConversationSummary = Omit<Conversation, "messages"> & {
+  /** Timestamp of the last message, or null if none yet — drives the
+   * switcher's activity sort (Decisions/0004: no manual pin). */
+  lastMessageAt: string | null;
+};
 
 export interface ConversationUpdate {
   name?: string;
   personality?: string;
   model?: string;
   thinking?: boolean;
+  archived?: boolean;
 }
 
-// Applied to conversations created before model/thinking existed — keeps
-// old records loadable without a migration step.
+export interface SearchResult {
+  conversationId: string;
+  conversationName: string;
+  message: Message;
+}
+
+// Applied to conversations created before model/thinking/archived existed —
+// keeps old records loadable without a migration step.
 export const DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001";
 export const DEFAULT_THINKING = false;
+export const DEFAULT_ARCHIVED = false;
 
 /**
  * One file per conversation under a dedicated subdirectory, same atomic-write
@@ -69,10 +89,41 @@ export class ConversationStore {
       if (!entry.endsWith(".json")) continue;
       const conversation = await this.readFile(path.join(this.dir, entry));
       if (!conversation) continue;
-      const { messages: _messages, ...summary } = conversation;
-      summaries.push(summary);
+      const { messages, ...summary } = conversation;
+      const lastMessageAt = messages.length > 0 ? messages[messages.length - 1].ts : null;
+      summaries.push({ ...summary, lastMessageAt });
     }
+    // Most recently active first; conversations with no messages yet sort
+    // last rather than by creation order (Decisions/0004).
+    summaries.sort((a, b) => {
+      if (a.lastMessageAt === b.lastMessageAt) return 0;
+      if (a.lastMessageAt === null) return 1;
+      if (b.lastMessageAt === null) return -1;
+      return b.lastMessageAt.localeCompare(a.lastMessageAt);
+    });
     return summaries;
+  }
+
+  /** Case-insensitive substring match over every conversation's message
+   * text. Reads every conversation file, same PoC-scale tradeoff list()
+   * already accepts — fine at a handful of conversations. */
+  async search(query: string): Promise<SearchResult[]> {
+    const needle = query.toLowerCase();
+    const results: SearchResult[] = [];
+    for (const summary of await this.list()) {
+      const conversation = await this.get(summary.id);
+      if (!conversation) continue;
+      for (const message of conversation.messages) {
+        if (message.text.toLowerCase().includes(needle)) {
+          results.push({
+            conversationId: conversation.id,
+            conversationName: conversation.name,
+            message,
+          });
+        }
+      }
+    }
+    return results;
   }
 
   async get(id: string): Promise<Conversation | null> {
@@ -97,6 +148,7 @@ export class ConversationStore {
       personality,
       model,
       thinking,
+      archived: DEFAULT_ARCHIVED,
       createdAt: new Date().toISOString(),
       messages: [],
     };
@@ -104,11 +156,84 @@ export class ConversationStore {
     return conversation;
   }
 
-  async appendMessage(id: string, sender: string, text: string): Promise<Message | null> {
-    const message: Message = { id: randomUUID(), sender, text, ts: new Date().toISOString() };
+  async appendMessage(
+    id: string,
+    sender: string,
+    text: string,
+    modelOverride?: string,
+  ): Promise<Message | null> {
+    const message: Message = {
+      id: randomUUID(),
+      sender,
+      text,
+      ts: new Date().toISOString(),
+      ...(modelOverride ? { modelOverride } : {}),
+    };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);
     return write;
+  }
+
+  /** Retract a message (Phase 5). Regenerate reuses this on a persona's
+   * own last reply — deleting it makes the conversation's last sender
+   * Edvard again, so the runner's existing turn-taking rule regenerates
+   * on its next poll without a separate regenerate endpoint. */
+  async deleteMessage(id: string, messageId: string): Promise<boolean> {
+    const write = this.writeQueue.then(() => this.deleteMessageWith(id, messageId));
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  private async deleteMessageWith(id: string, messageId: string): Promise<boolean> {
+    const conversation = await this.get(id);
+    if (!conversation) return false;
+    const index = conversation.messages.findIndex((m) => m.id === messageId);
+    if (index === -1) return false;
+    conversation.messages.splice(index, 1);
+    await this.writeFile(conversation);
+    return true;
+  }
+
+  /** Edit-and-resend: changes a message's text and drops everything sent
+   * after it in this conversation, so a stale reply doesn't linger next
+   * to the edited question — the runner regenerates against the new text
+   * on its next poll, same mechanism as deleteMessage(). */
+  async editMessage(id: string, messageId: string, text: string): Promise<Message | null> {
+    const write = this.writeQueue.then(() => this.editMessageWith(id, messageId, text));
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  private async editMessageWith(
+    id: string,
+    messageId: string,
+    text: string,
+  ): Promise<Message | null> {
+    const conversation = await this.get(id);
+    if (!conversation) return null;
+    const index = conversation.messages.findIndex((m) => m.id === messageId);
+    if (index === -1) return null;
+    conversation.messages[index] = { ...conversation.messages[index], text };
+    conversation.messages = conversation.messages.slice(0, index + 1);
+    await this.writeFile(conversation);
+    return conversation.messages[index];
+  }
+
+  /** Delete a whole conversation (Phase 5 — no DELETE existed before this). */
+  async delete(id: string): Promise<boolean> {
+    const write = this.writeQueue.then(() => this.deleteConversationWith(id));
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  private async deleteConversationWith(id: string): Promise<boolean> {
+    try {
+      await fs.unlink(this.filePath(id));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw err;
+    }
   }
 
   /** Partial update — only the fields present in `updates` change. Used by
@@ -143,6 +268,7 @@ export class ConversationStore {
       const conversation = JSON.parse(raw) as Conversation;
       conversation.model ??= DEFAULT_MODEL;
       conversation.thinking ??= DEFAULT_THINKING;
+      conversation.archived ??= DEFAULT_ARCHIVED;
       return conversation;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;

@@ -8,6 +8,10 @@ export interface ModelOption {
    * can't be turned off — both are `false` here for the same UI reason
    * (hide the toggle), even though the underlying reason differs. */
   supportsThinking: boolean;
+  /** Phase 5 capability badge (Feature-Ideas.md #34) — static metadata
+   * only, no live capability grants yet (that's Decisions/0002, Phase 6/7).
+   * Left undefined rather than guessed where not confidently known. */
+  contextWindow?: string;
 }
 
 // Current-generation models only — not every legacy/deprecated snapshot.
@@ -20,24 +24,28 @@ export const MODEL_CATALOG: ModelOption[] = [
     label: "Claude Haiku 4.5",
     provider: "anthropic",
     supportsThinking: false,
+    contextWindow: "200K",
   },
   {
     id: "anthropic:claude-sonnet-5",
     label: "Claude Sonnet 5",
     provider: "anthropic",
     supportsThinking: true,
+    contextWindow: "1M",
   },
   {
     id: "anthropic:claude-opus-4-8",
     label: "Claude Opus 4.8",
     provider: "anthropic",
     supportsThinking: true,
+    contextWindow: "1M",
   },
   {
     id: "anthropic:claude-fable-5",
     label: "Claude Fable 5",
     provider: "anthropic",
     supportsThinking: false,
+    contextWindow: "1M",
   },
   {
     id: "gemini:gemini-flash-latest",
