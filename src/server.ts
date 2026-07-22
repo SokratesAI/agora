@@ -75,9 +75,17 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
 /** Joined view (Architecture §2): the curator persona's live fields ride
  * along top-level so the previous runner — which reads
  * detail.personality/model/thinking — keeps working unchanged against
- * this backend during a mixed-version deploy. */
+ * this backend during a mixed-version deploy.
+ *
+ * Takes `Omit<Conversation, "messages">` (not `Conversation`) so it works
+ * for both full conversations and list summaries — found live 2026-07-22:
+ * GET /conversations only ever called this with the summary shape and
+ * fell back to the stale inline fields, so the drawer/Studio kept showing
+ * a conversation's *original* model/personality forever, even after the
+ * curator persona was edited. Every other route was already correct;
+ * this was the one spot the join never actually ran. */
 async function enrichConversation(
-  conversation: Conversation,
+  conversation: Omit<Conversation, "messages"> & { lastMessageAt?: string | null },
   personas: PersonaStore,
 ): Promise<Record<string, unknown>> {
   let personality = conversation.personality;
@@ -113,6 +121,7 @@ async function enrichConversation(
     rootId: conversation.rootId,
     forkedFrom: conversation.forkedFrom,
     createdAt: conversation.createdAt,
+    ...(conversation.lastMessageAt !== undefined ? { lastMessageAt: conversation.lastMessageAt } : {}),
   };
 }
 
@@ -634,7 +643,9 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   // ---- Conversations ----------------------------------------------------
   app.get("/conversations", async (_req, res) => {
-    res.status(200).json({ conversations: await conversations.list() });
+    const summaries = await conversations.list();
+    const enriched = await Promise.all(summaries.map((s) => enrichConversation(s, personas)));
+    res.status(200).json({ conversations: enriched });
   });
 
   app.delete("/conversations/:id", async (req, res) => {
