@@ -118,6 +118,8 @@ const capWebSearch = $("cap-webSearch");
 const capVaultRead = $("cap-vaultRead");
 const capVaultWrite = $("cap-vaultWrite");
 const capCodeExecution = $("cap-codeExecution");
+const capKubectlRead = $("cap-kubectlRead");
+const capGithubRead = $("cap-githubRead");
 
 const heartbeatStudioScrim = $("heartbeat-studio-scrim");
 const heartbeatStudioList = $("heartbeat-studio-list");
@@ -753,9 +755,12 @@ newChatModal.addEventListener("submit", async (event) => {
 function personaMeta(persona) {
   const model = modelCatalogById.get(persona.model);
   const caps = persona.capabilities || {};
-  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution"]
+  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead"]
     .filter((c) => caps[c])
-    .map((c) => ({ webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code" }[c]));
+    .map((c) => ({
+      webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code",
+      kubectlRead: "k8s", githubRead: "gh",
+    }[c]));
   return `${model ? model.label : persona.model}${enabled.length ? " · " + enabled.join(", ") : ""}`;
 }
 
@@ -852,11 +857,16 @@ function openPersonaForm(persona) {
   personaFormPersonality.value = persona?.personality || "";
   if (persona?.model && modelCatalogById.has(persona.model)) personaFormModel.value = persona.model;
   personaFormThinking.checked = Boolean(persona?.thinking);
-  const caps = persona?.capabilities || { webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false };
+  const caps = persona?.capabilities || {
+    webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false,
+    kubectlRead: false, githubRead: false,
+  };
   capWebSearch.checked = Boolean(caps.webSearch);
   capVaultRead.checked = Boolean(caps.vaultRead);
   capVaultWrite.checked = Boolean(caps.vaultWrite);
   capCodeExecution.checked = Boolean(caps.codeExecution);
+  capKubectlRead.checked = Boolean(caps.kubectlRead);
+  capGithubRead.checked = Boolean(caps.githubRead);
   personaFormMemory.value = persona?.sharedMemory || "";
   personaFormTemplate.checked = Boolean(persona?.isTemplate);
   personaFormPreviewText.value = "";
@@ -920,6 +930,8 @@ personaForm.addEventListener("submit", async (event) => {
       vaultRead: capVaultRead.checked,
       vaultWrite: capVaultWrite.checked,
       codeExecution: capCodeExecution.checked,
+      kubectlRead: capKubectlRead.checked,
+      githubRead: capGithubRead.checked,
     },
     sharedMemory: personaFormMemory.value,
     isTemplate: personaFormTemplate.checked,
@@ -1292,9 +1304,37 @@ function renderMessageBlock(message, isLast) {
   const body = document.createElement("div");
   body.className = (mine ? "msg-bubble mine" : "msg-plain") + (message.forgotten ? " msg-forgotten" : "");
   body.innerHTML = renderMarkdown(message.text);
+  renderAttachments(body, message.attachments);
   block.appendChild(body);
   attachLongPress(body, message, mine, isLast);
   return block;
+}
+
+// Issues.md: "Sending files, images or voice does not work". Images
+// render inline; everything else is a download link — `<a download>`
+// rather than opening in a new tab avoids navigating the whole PWA away
+// from the chat for, say, a PDF.
+function renderAttachments(container, attachments) {
+  if (!attachments || attachments.length === 0) return;
+  const wrap = document.createElement("div");
+  wrap.className = "msg-attachments";
+  for (const att of attachments) {
+    if (att.mimeType && att.mimeType.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.src = `/attachments/${att.id}`;
+      img.alt = att.filename;
+      img.className = "msg-attachment-image";
+      wrap.appendChild(img);
+    } else {
+      const link = document.createElement("a");
+      link.href = `/attachments/${att.id}`;
+      link.download = att.filename;
+      link.className = "msg-attachment-file";
+      link.textContent = `📎 ${att.filename}`;
+      wrap.appendChild(link);
+    }
+  }
+  container.appendChild(wrap);
 }
 
 // --- Long-press message menu (Edvard's 2026-07-20 pattern, kept) -------------
@@ -1599,18 +1639,40 @@ function autoGrow() {
   replyInput.style.height = `${replyInput.scrollHeight}px`;
 }
 replyInput.addEventListener("input", autoGrow);
+// Touch devices have no reliable way to type Shift+Enter, so treating any
+// unmodified Enter as "submit" makes multi-line composition impossible —
+// the very first Enter press sends whatever's typed so far (Issues.md:
+// "impossible to write multiline input"). Re-checked per keystroke (not
+// cached) so a hybrid device that gains/loses a physical keyboard/mouse
+// mid-session still gets the right behavior. Touch devices always get a
+// newline on Enter; sending happens via the visible send button instead.
+function isCoarsePointer() {
+  return Boolean(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+}
 replyInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    replyForm.requestSubmit();
-  }
+  if (event.key !== "Enter" || event.shiftKey || isCoarsePointer()) return;
+  event.preventDefault();
+  replyForm.requestSubmit();
 });
+
+async function uploadAttachment(file) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  try {
+    const res = await fetch("/attachments", { method: "POST", body: formData });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.attachment?.id || null;
+  } catch {
+    return null;
+  }
+}
 
 replyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = replyInput.value.trim();
-  if (!text || !currentConversationId) return;
-  const hadStagedFiles = stagedFiles.length > 0;
+  if ((!text && stagedFiles.length === 0) || !currentConversationId) return;
+  const filesToUpload = stagedFiles;
   replyInput.value = "";
   autoGrow();
   mentionBar.hidden = true;
@@ -1618,10 +1680,14 @@ replyForm.addEventListener("submit", async (event) => {
   renderAttachChips();
   replyInput.disabled = true;
   try {
-    await api("POST", replyEndpoint(), { text });
-    if (hadStagedFiles) {
-      setStatus("File attachments aren't wired up yet — sent as text only.", 4000);
+    const uploadedIds = (await Promise.all(filesToUpload.map(uploadAttachment))).filter(Boolean);
+    if (uploadedIds.length < filesToUpload.length) {
+      setStatus("Some attachments failed to upload — the rest of the message still sent.", 4000);
     }
+    await api("POST", replyEndpoint(), {
+      text,
+      ...(uploadedIds.length > 0 ? { attachmentIds: uploadedIds } : {}),
+    });
   } finally {
     replyInput.disabled = false;
     replyInput.focus();

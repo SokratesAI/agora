@@ -2,6 +2,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+/** Metadata for one uploaded file (Issues.md: "Sending files, images...
+ * does not work"). Content lives in AttachmentStore, keyed by `id`; a
+ * message only carries the metadata, never the bytes. */
+export interface MessageAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface Message {
   id: string;
   sender: string;
@@ -15,6 +25,9 @@ export interface Message {
   /** "Forget this" (Feature-Ideas #24) — excluded from every LLM context
    * the runner builds, still rendered (struck through) in the UI. */
   forgotten?: boolean;
+  /** Files/images sent with this message — undefined/empty for the
+   * overwhelming majority of messages, which carry no attachment. */
+  attachments?: MessageAttachment[];
 }
 
 /** Exactly one "curator" per conversation; listeners reply only when
@@ -291,6 +304,7 @@ export class ConversationStore {
     sender: string,
     text: string,
     modelOverride?: string,
+    attachments?: MessageAttachment[],
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -298,6 +312,7 @@ export class ConversationStore {
       text,
       ts: new Date().toISOString(),
       ...(modelOverride ? { modelOverride } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);
