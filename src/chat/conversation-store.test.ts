@@ -246,4 +246,82 @@ describe("ConversationStore", () => {
     await store.appendMessage(conversation.id, "Edvard", "hello");
     expect(await store.search("xyzzy")).toEqual([]);
   });
+
+  it("backfills status/memory/tags/rootId but never personas", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Old", "p");
+    const filePath = path.join(dir, "conversations", `${conversation.id}.json`);
+    const { status: _s, memory: _m, tags: _t, rootId: _r, ...older } = conversation;
+    await fs.writeFile(filePath, JSON.stringify(older));
+    const reloaded = await store.get(conversation.id);
+    expect(reloaded?.status).toBe("active");
+    expect(reloaded?.memory).toBe("");
+    expect(reloaded?.tags).toEqual([]);
+    expect(reloaded?.rootId).toBe(conversation.id);
+    // absence of personas is the migration's "unmigrated" signal
+    expect(reloaded?.personas).toBeUndefined();
+  });
+
+  it("forks a conversation at a message, keeping lineage and adding listeners", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const source = await store.create("Marcus", "trainer", undefined, undefined, [
+      { personaId: "p1", role: "curator" },
+    ]);
+    const first = await store.appendMessage(source.id, "Edvard", "one");
+    await store.appendMessage(source.id, "Marcus", "two");
+
+    const forked = await store.fork(source.id, first!.id, ["p2"]);
+    expect(forked?.name).toBe("Marcus (fork)");
+    expect(forked?.rootId).toBe(source.id);
+    expect(forked?.forkedFrom).toEqual({ conversationId: source.id, messageId: first!.id });
+    expect(forked?.messages.map((m) => m.text)).toEqual(["one"]);
+    expect(forked?.personas).toEqual([
+      { personaId: "p1", role: "curator" },
+      { personaId: "p2", role: "listener" },
+    ]);
+    expect(forked?.memory).toBe(source.memory);
+
+    // second fork gets a numbered name, same lineage
+    const second = await store.fork(source.id);
+    expect(second?.name).toBe("Marcus (fork 2)");
+    expect(second?.rootId).toBe(source.id);
+    expect(second?.messages).toHaveLength(2);
+  });
+
+  it("fork returns null for unknown conversation or message", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    expect(await store.fork("nope")).toBeNull();
+    const conversation = await store.create("A", "p");
+    expect(await store.fork(conversation.id, "missing-message")).toBeNull();
+  });
+
+  it("toggles forgotten on a message", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("A", "p");
+    const message = await store.appendMessage(conversation.id, "Edvard", "secret");
+    expect(await store.setForgotten(conversation.id, message!.id, true)).toBe(true);
+    let reloaded = await store.get(conversation.id);
+    expect(reloaded?.messages[0].forgotten).toBe(true);
+    expect(await store.setForgotten(conversation.id, message!.id, false)).toBe(true);
+    reloaded = await store.get(conversation.id);
+    expect(reloaded?.messages[0].forgotten).toBeUndefined();
+    expect(await store.setForgotten(conversation.id, "nope", true)).toBe(false);
+  });
+
+  it("bulk-imports messages preserving order and ids", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Main", "");
+    const ok = await store.importMessages(conversation.id, [
+      { id: "m1", sender: "Edvard", text: "a", ts: "2026-01-01T00:00:00.000Z" },
+      { id: "m2", sender: "Claude", text: "b", ts: "2026-01-01T00:01:00.000Z" },
+    ]);
+    expect(ok).toBe(true);
+    const reloaded = await store.get(conversation.id);
+    expect(reloaded?.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
 });

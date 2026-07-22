@@ -2,10 +2,19 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import pino from "pino";
 import type { Express } from "express";
-import { createPublicApp, createInternalApp, type WebPushSender } from "./server.js";
+import {
+  createPublicApp,
+  createInternalApp,
+  type ServerDeps,
+  type WebPushSender,
+  type InvokePayload,
+} from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
 import { MessageStore } from "./chat/message-store.js";
 import { ConversationStore } from "./chat/conversation-store.js";
+import { PersonaStore } from "./chat/persona-store.js";
+import { HeartbeatStore } from "./chat/heartbeat-store.js";
+import { AuditStore } from "./chat/audit-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -24,445 +33,623 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     vapidPublicKey: "test-public-key",
     vapidPrivateKey: "test-private-key",
     vapidSubject: "mailto:test@example.com",
+    runnerUrl: undefined,
+    agentToken: undefined,
     ...overrides,
   };
 }
 
+async function makeDeps(configOverrides: Partial<Config> = {}): Promise<
+  ServerDeps & { dir: string; invokeMock: ReturnType<typeof vi.fn> }
+> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-server-test-"));
+  const invokeMock = vi.fn(async (_payload: InvokePayload) => "mock reply");
+  const webPush: WebPushSender = { sendNotification: vi.fn().mockResolvedValue(undefined) };
+  return {
+    dir,
+    invokeMock,
+    config: makeConfig(configOverrides),
+    store: new SubscriptionStore(dir),
+    messages: new MessageStore(dir),
+    conversations: new ConversationStore(dir),
+    personas: new PersonaStore(dir),
+    heartbeats: new HeartbeatStore(dir),
+    audit: new AuditStore(dir),
+    webPush,
+    logger: pino({ enabled: false }),
+    invokeRunner: invokeMock,
+  };
+}
+
 describe("agora public app", () => {
+  let deps: Awaited<ReturnType<typeof makeDeps>>;
   let app: Express;
-  let store: SubscriptionStore;
-  let messages: MessageStore;
-  let conversations: ConversationStore;
-  let dir: string;
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-server-test-"));
-    store = new SubscriptionStore(dir);
-    messages = new MessageStore(dir);
-    conversations = new ConversationStore(dir);
-    app = createPublicApp({
-      config: makeConfig(),
-      store,
-      messages,
-      conversations,
-      logger: pino({ enabled: false }),
-    });
+    deps = await makeDeps();
+    app = createPublicApp(deps);
   });
 
   it("GET /healthz always returns 200", async () => {
-    const res = await request(app).get("/healthz");
-    expect(res.status).toBe(200);
+    expect((await request(app).get("/healthz")).status).toBe(200);
   });
 
-  it("GET /health returns 200 when VAPID is configured", async () => {
-    const res = await request(app).get("/health");
-    expect(res.status).toBe(200);
-  });
-
-  it("GET /health returns 503 when VAPID is not configured", async () => {
+  it("GET /health reflects VAPID configuration", async () => {
+    expect((await request(app).get("/health")).status).toBe(200);
     const unconfigured = createPublicApp({
+      ...deps,
       config: makeConfig({ vapidPublicKey: undefined, vapidPrivateKey: undefined }),
-      store,
-      messages,
-      conversations,
-      logger: pino({ enabled: false }),
     });
-    const res = await request(unconfigured).get("/health");
-    expect(res.status).toBe(503);
+    expect((await request(unconfigured).get("/health")).status).toBe(503);
   });
 
-  it("GET /vapid-public-key returns the configured public key", async () => {
-    const res = await request(app).get("/vapid-public-key");
+  it("POST /subscribe stores a valid subscription and rejects junk", async () => {
+    expect((await request(app).post("/subscribe").send({ nope: true })).status).toBe(400);
+    expect((await request(app).post("/subscribe").send(validSubscription)).status).toBe(201);
+    expect(await deps.store.load()).toEqual(validSubscription);
+  });
+
+  it("does not mount /notify at all — that's the internal app's job", async () => {
+    expect((await request(app).post("/notify").send({ text: "hi" })).status).toBe(404);
+  });
+
+  // ---- Legacy Main shims (ADR 0008) ------------------------------------
+  it("POST /reply lazily creates a Main conversation with an Agora persona", async () => {
+    const res = await request(app).post("/reply").send({ text: "hello" });
     expect(res.status).toBe(200);
-    expect(res.body.publicKey).toBe("test-public-key");
+    const main = await deps.conversations.findByName("Main");
+    expect(main).not.toBeNull();
+    expect(main?.messages).toMatchObject([{ sender: "Edvard", text: "hello" }]);
+    expect(main?.personas?.[0].role).toBe("curator");
+    const persona = await deps.personas.get(main!.personas![0].personaId);
+    expect(persona?.name).toBe("Agora");
   });
 
-  it("POST /subscribe rejects an invalid body", async () => {
-    const res = await request(app).post("/subscribe").send({ nope: true });
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /subscribe stores a valid subscription", async () => {
-    const res = await request(app).post("/subscribe").send(validSubscription);
-    expect(res.status).toBe(201);
-    expect(await store.load()).toEqual(validSubscription);
-  });
-
-  it("POST /reply logs, stores, and returns 200", async () => {
-    const res = await request(app).post("/reply").send({ text: "sounds good" });
-    expect(res.status).toBe(200);
-    expect(res.body.message).toMatchObject({ sender: "Edvard", text: "sounds good" });
-    expect(await messages.list()).toMatchObject([{ sender: "Edvard", text: "sounds good" }]);
-  });
-
-  it("POST /reply rejects a missing text field", async () => {
-    const res = await request(app).post("/reply").send({});
-    expect(res.status).toBe(400);
-  });
-
-  it("GET /messages returns an empty list before anything is sent", async () => {
-    const res = await request(app).get("/messages");
-    expect(res.status).toBe(200);
-    expect(res.body.messages).toEqual([]);
-  });
-
-  it("GET /messages returns stored messages in order", async () => {
+  it("GET /messages serves the Main conversation's thread", async () => {
     await request(app).post("/reply").send({ text: "first" });
     await request(app).post("/reply").send({ text: "second" });
     const res = await request(app).get("/messages");
     expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(["first", "second"]);
   });
 
-  it("does not mount /notify at all — that's the internal app's job", async () => {
-    const res = await request(app).post("/notify").send({ text: "hi" });
-    expect(res.status).toBe(404);
-  });
-
-  it("GET /conversations returns an empty list before any conversation exists", async () => {
-    const res = await request(app).get("/conversations");
-    expect(res.status).toBe(200);
-    expect(res.body.conversations).toEqual([]);
-  });
-
-  it("GET /conversations lists summaries without messages", async () => {
-    await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).get("/conversations");
-    expect(res.body.conversations).toMatchObject([{ name: "Haiku", personality: "a helpful persona" }]);
-    expect(res.body.conversations[0].messages).toBeUndefined();
-  });
-
-  it("GET /conversations/:id/messages 404s for an unknown id", async () => {
-    const res = await request(app).get("/conversations/nope/messages");
-    expect(res.status).toBe(404);
-  });
-
-  it("GET /conversations/:id/messages returns the personality and thread", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    await conversations.appendMessage(conversation.id, "Edvard", "hi");
-    const res = await request(app).get(`/conversations/${conversation.id}/messages`);
-    expect(res.status).toBe(200);
-    expect(res.body.personality).toBe("a helpful persona");
-    expect(res.body.messages).toMatchObject([{ sender: "Edvard", text: "hi" }]);
-  });
-
-  it("POST /conversations/:id/reply appends as Edvard", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app)
-      .post(`/conversations/${conversation.id}/reply`)
-      .send({ text: "hello" });
-    expect(res.status).toBe(200);
-    expect(res.body.message).toMatchObject({ sender: "Edvard", text: "hello" });
-  });
-
-  it("POST /conversations/:id/reply 404s for an unknown id", async () => {
-    const res = await request(app).post("/conversations/nope/reply").send({ text: "hi" });
-    expect(res.status).toBe(404);
-  });
-
-  it("POST /conversations/:id/reply rejects a missing text field", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).post(`/conversations/${conversation.id}/reply`).send({});
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /conversations creates a new conversation (Edvard creating from the phone UI)", async () => {
-    const res = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "a helpful persona" });
-    expect(res.status).toBe(201);
-    expect(res.body.conversation).toMatchObject({ name: "Haiku", personality: "a helpful persona" });
-  });
-
-  it("POST /conversations returns the existing conversation on a repeat name", async () => {
-    const first = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "a helpful persona" });
-    const second = await request(app).post("/conversations").send({ name: "Haiku" });
-    expect(second.status).toBe(200);
-    expect(second.body.conversation.id).toBe(first.body.conversation.id);
-  });
-
-  it("POST /conversations rejects a missing name", async () => {
-    const res = await request(app).post("/conversations").send({});
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /conversations accepts a valid model and thinking flag", async () => {
-    const res = await request(app)
-      .post("/conversations")
-      .send({ name: "Gemini", model: "gemini:gemini-flash-latest", thinking: true });
-    expect(res.status).toBe(201);
-    expect(res.body.conversation).toMatchObject({
-      model: "gemini:gemini-flash-latest",
-      thinking: true,
-    });
-  });
-
-  it("POST /conversations rejects an unknown model", async () => {
-    const res = await request(app).post("/conversations").send({ name: "Bad", model: "nope:nope" });
-    expect(res.status).toBe(400);
-  });
-
-  it("GET /models returns the model catalog", async () => {
-    const res = await request(app).get("/models");
-    expect(res.status).toBe(200);
-    expect(res.body.models.length).toBeGreaterThan(0);
-    expect(res.body.models[0]).toHaveProperty("id");
-    expect(res.body.models[0]).toHaveProperty("provider");
-    expect(res.body.models[0]).toHaveProperty("supportsThinking");
-  });
-
-  it("GET /conversations/:id/messages includes model and thinking", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).get(`/conversations/${conversation.id}/messages`);
-    expect(res.body).toMatchObject({ model: conversation.model, thinking: conversation.thinking });
-  });
-
-  it("PATCH /conversations/:id updates only the given fields", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app)
-      .patch(`/conversations/${conversation.id}`)
-      .send({ model: "anthropic:claude-sonnet-5", thinking: true });
-    expect(res.status).toBe(200);
-    expect(res.body.conversation).toMatchObject({
-      name: "Haiku",
-      model: "anthropic:claude-sonnet-5",
-      thinking: true,
-    });
-  });
-
-  it("PATCH /conversations/:id 404s for an unknown id", async () => {
-    const res = await request(app).patch("/conversations/nope").send({ model: "anthropic:claude-sonnet-5" });
-    expect(res.status).toBe(404);
-  });
-
-  it("PATCH /conversations/:id rejects an unknown model", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).patch(`/conversations/${conversation.id}`).send({ model: "nope:nope" });
-    expect(res.status).toBe(400);
-  });
-
-  it("PATCH /conversations/:id can archive a conversation", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).patch(`/conversations/${conversation.id}`).send({ archived: true });
-    expect(res.status).toBe(200);
-    expect(res.body.conversation.archived).toBe(true);
-  });
-
-  it("DELETE /conversations/:id removes it", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).delete(`/conversations/${conversation.id}`);
-    expect(res.status).toBe(200);
-    expect(await conversations.get(conversation.id)).toBeNull();
-  });
-
-  it("DELETE /conversations/:id 404s for an unknown id", async () => {
-    const res = await request(app).delete("/conversations/nope");
-    expect(res.status).toBe(404);
-  });
-
-  it("DELETE /conversations/:id/messages/:messageId retracts a message", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const message = await conversations.appendMessage(conversation.id, "Edvard", "hi");
-    const res = await request(app).delete(
-      `/conversations/${conversation.id}/messages/${message!.id}`,
-    );
-    expect(res.status).toBe(200);
-    const reloaded = await conversations.get(conversation.id);
-    expect(reloaded?.messages).toEqual([]);
-  });
-
-  it("DELETE /conversations/:id/messages/:messageId 404s for an unknown message", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app).delete(`/conversations/${conversation.id}/messages/nope`);
-    expect(res.status).toBe(404);
-  });
-
-  it("PATCH /conversations/:id/messages/:messageId edits text and drops later messages", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const first = await conversations.appendMessage(conversation.id, "Edvard", "typo");
-    await conversations.appendMessage(conversation.id, "Haiku", "reply");
-    const res = await request(app)
-      .patch(`/conversations/${conversation.id}/messages/${first!.id}`)
-      .send({ text: "fixed" });
-    expect(res.status).toBe(200);
-    expect(res.body.message.text).toBe("fixed");
-    const reloaded = await conversations.get(conversation.id);
-    expect(reloaded?.messages.map((m) => m.text)).toEqual(["fixed"]);
-  });
-
-  it("POST /conversations/:id/reply accepts a per-message model override", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app)
-      .post(`/conversations/${conversation.id}/reply`)
-      .send({ text: "answer with Opus please", model: "anthropic:claude-opus-4-8" });
-    expect(res.status).toBe(200);
-    expect(res.body.message.modelOverride).toBe("anthropic:claude-opus-4-8");
-  });
-
-  it("POST /conversations/:id/reply rejects an unknown model override", async () => {
-    const conversation = await conversations.create("Haiku", "a helpful persona");
-    const res = await request(app)
-      .post(`/conversations/${conversation.id}/reply`)
-      .send({ text: "hi", model: "nope:nope" });
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /reply accepts a per-message model override on the global thread", async () => {
-    const res = await request(app)
-      .post("/reply")
-      .send({ text: "hi", model: "gemini:gemini-flash-latest" });
-    expect(res.status).toBe(200);
-    expect(res.body.message.modelOverride).toBe("gemini:gemini-flash-latest");
-  });
-
-  it("DELETE /messages/:messageId retracts a global-thread message", async () => {
-    const sent = await request(app).post("/reply").send({ text: "oops" });
-    const res = await request(app).delete(`/messages/${sent.body.message.id}`);
-    expect(res.status).toBe(200);
-    expect(await messages.list()).toEqual([]);
-  });
-
-  it("PATCH /messages/:messageId edits a global-thread message", async () => {
+  it("DELETE and PATCH /messages/:id operate on the Main conversation", async () => {
     const sent = await request(app).post("/reply").send({ text: "typo" });
-    const res = await request(app)
+    const edited = await request(app)
       .patch(`/messages/${sent.body.message.id}`)
       .send({ text: "fixed" });
-    expect(res.status).toBe(200);
-    expect(res.body.message.text).toBe("fixed");
+    expect(edited.body.message.text).toBe("fixed");
+    const deleted = await request(app).delete(`/messages/${sent.body.message.id}`);
+    expect(deleted.status).toBe(200);
+    expect((await deps.conversations.findByName("Main"))?.messages).toEqual([]);
   });
 
-  it("GET /search finds matches across the global thread and named conversations", async () => {
-    await request(app).post("/reply").send({ text: "let's talk about training today" });
-    const conversation = await conversations.create("Marcus", "a trainer persona");
-    await conversations.appendMessage(conversation.id, "Marcus", "how was TRAINING yesterday?");
-    const res = await request(app).get("/search").query({ q: "training" });
+  // ---- Personas ---------------------------------------------------------
+  it("POST /personas validates and creates with capability defaults", async () => {
+    expect((await request(app).post("/personas").send({ name: "X" })).status).toBe(400);
+    expect(
+      (await request(app).post("/personas").send({ name: "X", model: "nope:nope" })).status,
+    ).toBe(400);
+    const res = await request(app)
+      .post("/personas")
+      .send({ name: "Marcus", model: "anthropic:claude-sonnet-5", personality: "trainer" });
+    expect(res.status).toBe(201);
+    expect(res.body.persona.capabilities).toMatchObject({
+      webSearch: true,
+      vaultRead: true,
+      vaultWrite: false,
+      codeExecution: false,
+    });
+  });
+
+  it("PATCH /personas/:id merges partial capability updates", async () => {
+    const created = await request(app)
+      .post("/personas")
+      .send({ name: "W", model: "anthropic:claude-sonnet-5" });
+    const res = await request(app)
+      .patch(`/personas/${created.body.persona.id}`)
+      .send({ capabilities: { vaultWrite: true }, sharedMemory: "notes" });
     expect(res.status).toBe(200);
+    expect(res.body.persona.capabilities.vaultWrite).toBe(true);
+    expect(res.body.persona.capabilities.webSearch).toBe(true);
+    expect(res.body.persona.sharedMemory).toBe("notes");
+  });
+
+  it("DELETE /personas/:id refuses while referenced by a conversation or heartbeat", async () => {
+    const created = await request(app)
+      .post("/personas")
+      .send({ name: "Used", model: "anthropic:claude-sonnet-5" });
+    const personaId = created.body.persona.id;
+    const conversation = await request(app)
+      .post("/conversations")
+      .send({ name: "UsesIt", personaId });
+    expect(conversation.status).toBe(201);
+
+    const refused = await request(app).delete(`/personas/${personaId}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.conversations).toEqual(["UsesIt"]);
+
+    // Unreferenced persona deletes fine.
+    const lone = await request(app)
+      .post("/personas")
+      .send({ name: "Lone", model: "anthropic:claude-sonnet-5" });
+    expect((await request(app).delete(`/personas/${lone.body.persona.id}`)).status).toBe(200);
+  });
+
+  it("POST /personas/:id/clone copies fields, never as template", async () => {
+    const created = await request(app)
+      .post("/personas")
+      .send({ name: "T", model: "anthropic:claude-sonnet-5", isTemplate: true });
+    const clone = await request(app)
+      .post(`/personas/${created.body.persona.id}/clone`)
+      .send({ name: "T-live" });
+    expect(clone.status).toBe(201);
+    expect(clone.body.persona.name).toBe("T-live");
+    expect(clone.body.persona.isTemplate).toBe(false);
+  });
+
+  it("POST /personas/preview invokes the runner with inline persona, tool-less contract", async () => {
+    const res = await request(app)
+      .post("/personas/preview")
+      .send({ personality: "draft", model: "anthropic:claude-sonnet-5", text: "hi" });
+    expect(res.status).toBe(200);
+    expect(res.body.reply).toBe("mock reply");
+    const payload = deps.invokeMock.mock.calls[0][0] as InvokePayload;
+    expect(payload.persona).toEqual({
+      personality: "draft",
+      model: "anthropic:claude-sonnet-5",
+      thinking: false,
+    });
+    expect(payload.personaId).toBeUndefined();
+  });
+
+  it("preview 503s without a runner and 502s when invoke fails", async () => {
+    const noRunner = createPublicApp({ ...deps, invokeRunner: undefined });
+    expect(
+      (
+        await request(noRunner)
+          .post("/personas/preview")
+          .send({ model: "anthropic:claude-sonnet-5", text: "hi" })
+      ).status,
+    ).toBe(503);
+
+    deps.invokeMock.mockRejectedValueOnce(new Error("boom"));
+    expect(
+      (
+        await request(app)
+          .post("/personas/preview")
+          .send({ model: "anthropic:claude-sonnet-5", text: "hi" })
+      ).status,
+    ).toBe(502);
+  });
+
+  // ---- Conversations with personas --------------------------------------
+  it("POST /conversations creates an inline persona and links it as curator", async () => {
+    const res = await request(app)
+      .post("/conversations")
+      .send({ name: "Coach", personality: "p", model: "anthropic:claude-sonnet-5" });
+    expect(res.status).toBe(201);
+    expect(res.body.conversation.personas).toHaveLength(1);
+    expect(res.body.conversation.personas[0].role).toBe("curator");
+    expect(res.body.conversation.personality).toBe("p");
+    const personas = await deps.personas.list();
+    expect(personas.some((p) => p.name === "Coach")).toBe(true);
+  });
+
+  it("POST /conversations with personaId reuses an existing persona", async () => {
+    const persona = await deps.personas.create({
+      name: "Shared",
+      model: "anthropic:claude-sonnet-5",
+      personality: "shared brain",
+    });
+    const res = await request(app)
+      .post("/conversations")
+      .send({ name: "Chat A", personaId: persona.id });
+    expect(res.status).toBe(201);
+    expect(res.body.conversation.personas[0].personaId).toBe(persona.id);
+    expect(res.body.conversation.personality).toBe("shared brain");
+  });
+
+  it("GET /conversations/:id/messages joins live curator persona fields", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Joined", personality: "old", model: "anthropic:claude-sonnet-5" });
+    const conversationId = created.body.conversation.id;
+    const personaId = created.body.conversation.personas[0].personaId;
+    await deps.personas.update(personaId, { personality: "edited later" });
+
+    const res = await request(app).get(`/conversations/${conversationId}/messages`);
+    expect(res.body.personality).toBe("edited later");
+    expect(res.body.personas[0].name).toBe("Joined");
+    expect(res.body.status).toBe("active");
+  });
+
+  it("GET /conversations/:id/messages honors ?limit and reports totalMessages", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Long", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    for (let i = 0; i < 5; i++) {
+      await request(app).post(`/conversations/${id}/reply`).send({ text: `m${i}` });
+    }
+    const res = await request(app).get(`/conversations/${id}/messages?limit=2`);
+    expect(res.body.totalMessages).toBe(5);
+    expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(["m3", "m4"]);
+  });
+
+  it("PATCH /conversations/:id routes personality/model edits to the curator persona", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Edit", personality: "before", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const personaId = created.body.conversation.personas[0].personaId;
+
+    const res = await request(app)
+      .patch(`/conversations/${id}`)
+      .send({ personality: "after", model: "gemini:gemini-flash-latest", status: "paused" });
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.personality).toBe("after");
+    expect(res.body.conversation.model).toBe("gemini:gemini-flash-latest");
+    expect(res.body.conversation.status).toBe("paused");
+
+    const persona = await deps.personas.get(personaId);
+    expect(persona?.personality).toBe("after");
+    expect(persona?.model).toBe("gemini:gemini-flash-latest");
+  });
+
+  it("PATCH /conversations/:id validates persona link sets", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Multi", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const curatorId = created.body.conversation.personas[0].personaId;
+    const second = await deps.personas.create({
+      name: "Listener",
+      model: "anthropic:claude-sonnet-5",
+    });
+
+    // two curators → 400
+    expect(
+      (
+        await request(app)
+          .patch(`/conversations/${id}`)
+          .send({
+            personas: [
+              { personaId: curatorId, role: "curator" },
+              { personaId: second.id, role: "curator" },
+            ],
+          })
+      ).status,
+    ).toBe(400);
+
+    // unknown persona → 400
+    expect(
+      (
+        await request(app)
+          .patch(`/conversations/${id}`)
+          .send({ personas: [{ personaId: "ghost", role: "curator" }] })
+      ).status,
+    ).toBe(400);
+
+    // valid curator + listener → 200, joined response carries both
+    const ok = await request(app)
+      .patch(`/conversations/${id}`)
+      .send({
+        personas: [
+          { personaId: curatorId, role: "curator" },
+          { personaId: second.id, role: "listener" },
+        ],
+      });
+    expect(ok.status).toBe(200);
+    expect(ok.body.conversation.personas).toHaveLength(2);
+  });
+
+  it("POST /conversations/:id/fork forks at a message with added listeners", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Root", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const first = await request(app).post(`/conversations/${id}/reply`).send({ text: "one" });
+    await request(app).post(`/conversations/${id}/reply`).send({ text: "two" });
+    const extra = await deps.personas.create({
+      name: "Extra",
+      model: "anthropic:claude-sonnet-5",
+    });
+
+    const res = await request(app)
+      .post(`/conversations/${id}/fork`)
+      .send({ atMessageId: first.body.message.id, addPersonaIds: [extra.id] });
+    expect(res.status).toBe(201);
+    expect(res.body.conversation.rootId).toBe(id);
+    expect(res.body.conversation.personas).toHaveLength(2);
+
+    const forked = await deps.conversations.get(res.body.conversation.id);
+    expect(forked?.messages.map((m) => m.text)).toEqual(["one"]);
+  });
+
+  it("POST /conversations/:id/ask uses curator personaId and persists nothing", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Asky", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    await request(app).post(`/conversations/${id}/reply`).send({ text: "context msg" });
+
+    const res = await request(app)
+      .post(`/conversations/${id}/ask`)
+      .send({ text: "side question?" });
+    expect(res.status).toBe(200);
+    expect(res.body.reply).toBe("mock reply");
+
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.personaId).toBe(created.body.conversation.personas[0].personaId);
+    expect(payload.messages.at(-1)).toEqual({ role: "user", content: "side question?" });
+
+    const conversation = await deps.conversations.get(id);
+    expect(conversation?.messages).toHaveLength(1); // ask persisted nothing
+  });
+
+  it("ask excludes forgotten messages from the context it sends", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Forgetful", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const secret = await request(app)
+      .post(`/conversations/${id}/reply`)
+      .send({ text: "the secret" });
+    await request(app).post(`/conversations/${id}/reply`).send({ text: "public" });
+    await request(app)
+      .post(`/conversations/${id}/messages/${secret.body.message.id}/forget`)
+      .send({});
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    const contents = payload.messages.map((m) => m.content);
+    expect(contents).not.toContain("the secret");
+    expect(contents).toContain("public");
+  });
+
+  it("POST .../forget toggles and 404s on unknown ids", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "F", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const sent = await request(app).post(`/conversations/${id}/reply`).send({ text: "x" });
+    expect(
+      (
+        await request(app)
+          .post(`/conversations/${id}/messages/${sent.body.message.id}/forget`)
+          .send({ forgotten: true })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await request(app).post(`/conversations/${id}/messages/nope/forget`).send({})).status,
+    ).toBe(404);
+  });
+
+  // ---- Heartbeats -------------------------------------------------------
+  async function createHeartbeatFixtures() {
+    const persona = await deps.personas.create({
+      name: "HB Persona",
+      model: "anthropic:claude-sonnet-5",
+    });
+    const conversation = await deps.conversations.create("HB Conv", "", undefined, undefined, [
+      { personaId: persona.id, role: "curator" },
+    ]);
+    return { persona, conversation };
+  }
+
+  it("POST /heartbeats validates schedule, persona, and conversation", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const base = {
+      name: "Morning",
+      personaId: persona.id,
+      conversationId: conversation.id,
+    };
+    expect(
+      (await request(app).post("/heartbeats").send({ ...base, schedule: "sometimes" })).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post("/heartbeats")
+          .send({ ...base, personaId: "ghost", schedule: "daily@08:00" })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post("/heartbeats")
+          .send({ ...base, conversationId: "ghost", schedule: "daily@08:00" })
+      ).status,
+    ).toBe(400);
+
+    const res = await request(app)
+      .post("/heartbeats")
+      .send({
+        ...base,
+        schedule: "daily@08:00",
+        task: "Check in about training",
+        vaultPaths: ["personal/training/", "sokrates/newspaper preferences.md"],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.heartbeat.vaultPaths).toHaveLength(2);
+    expect(res.body.heartbeat.enabled).toBe(true);
+  });
+
+  it("POST /heartbeats/:id/run queues a forced run", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const res = await request(app).post(`/heartbeats/${created.body.heartbeat.id}/run`);
+    expect(res.status).toBe(200);
+    expect(res.body.heartbeat.forceRun).toBe(true);
+  });
+
+  it("DELETE /conversations/:id refuses while heartbeats are bound to it", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    await request(app).post("/heartbeats").send({
+      name: "keeper",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@1h",
+    });
+    const refused = await request(app).delete(`/conversations/${conversation.id}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.heartbeats).toEqual(["keeper"]);
+  });
+
+  // ---- Search / audit ---------------------------------------------------
+  it("GET /search covers conversations without double-reporting Main", async () => {
+    await request(app).post("/reply").send({ text: "needle in main" });
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Other", model: "anthropic:claude-sonnet-5" });
+    await request(app)
+      .post(`/conversations/${created.body.conversation.id}/reply`)
+      .send({ text: "needle elsewhere" });
+    const res = await request(app).get("/search").query({ q: "needle" });
     expect(res.body.results).toHaveLength(2);
+    const names = res.body.results.map((r: { conversationName: string }) => r.conversationName);
+    expect(names.sort()).toEqual(["Main", "Other"]);
   });
 
-  it("GET /search returns no results for an empty query", async () => {
-    const res = await request(app).get("/search");
+  it("GET /audit returns recorded entries newest first", async () => {
+    await deps.audit.append({
+      personaName: "Marcus",
+      conversationId: "c1",
+      capability: "vault_write",
+      detail: "personal/training/log.md",
+    });
+    const res = await request(app).get("/audit");
     expect(res.status).toBe(200);
-    expect(res.body.results).toEqual([]);
+    expect(res.body.entries[0]).toMatchObject({ capability: "vault_write" });
   });
 });
 
 describe("agora internal app", () => {
+  let deps: Awaited<ReturnType<typeof makeDeps>>;
   let app: Express;
-  let store: SubscriptionStore;
-  let messages: MessageStore;
-  let conversations: ConversationStore;
-  let webPush: WebPushSender;
-  let dir: string;
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-internal-test-"));
-    store = new SubscriptionStore(dir);
-    messages = new MessageStore(dir);
-    conversations = new ConversationStore(dir);
-    webPush = { sendNotification: vi.fn().mockResolvedValue(undefined) };
-    app = createInternalApp({ store, messages, conversations, webPush, logger: pino({ enabled: false }) });
-  });
-
-  it("POST /notify returns 404 when no subscription is registered, but still records the message", async () => {
-    const res = await request(app).post("/notify").send({ persona: "Marcus", text: "hi" });
-    expect(res.status).toBe(404);
-    expect(await messages.list()).toMatchObject([{ sender: "Marcus", text: "hi" }]);
-  });
-
-  it("POST /notify sends a push, stores the message, and returns 200 once subscribed", async () => {
-    await store.save(validSubscription);
-    const res = await request(app).post("/notify").send({ persona: "Marcus", text: "hi" });
-    expect(res.status).toBe(200);
-    expect(webPush.sendNotification).toHaveBeenCalledWith(
-      validSubscription,
-      JSON.stringify({ title: "Marcus", body: "hi" }),
-    );
-    expect(await messages.list()).toMatchObject([{ sender: "Marcus", text: "hi" }]);
-  });
-
-  it("POST /notify returns 502 when the push send fails", async () => {
-    await store.save(validSubscription);
-    (webPush.sendNotification as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
-    const res = await request(app).post("/notify").send({ persona: "Marcus", text: "hi" });
-    expect(res.status).toBe(502);
-  });
-
-  it("POST /notify rejects a missing text field", async () => {
-    const res = await request(app).post("/notify").send({ persona: "Marcus" });
-    expect(res.status).toBe(400);
+    deps = await makeDeps();
+    app = createInternalApp(deps);
   });
 
   it("does not mount public routes at all", async () => {
-    const res = await request(app).get("/healthz");
-    expect(res.status).toBe(404);
+    expect((await request(app).get("/healthz")).status).toBe(404);
   });
 
-  it("POST /conversations creates a new conversation", async () => {
+  it("enforces x-agora-token when configured (ADR 0007)", async () => {
+    const guarded = createInternalApp({ ...deps, config: makeConfig({ agentToken: "s3cret" }) });
+    expect((await request(guarded).get("/heartbeats")).status).toBe(401);
+    expect(
+      (await request(guarded).get("/heartbeats").set("x-agora-token", "wrong")).status,
+    ).toBe(401);
+    expect(
+      (await request(guarded).get("/heartbeats").set("x-agora-token", "s3cret")).status,
+    ).toBe(200);
+  });
+
+  it("stays open when no token is configured (deploy-order safety)", async () => {
+    expect((await request(app).get("/heartbeats")).status).toBe(200);
+  });
+
+  it("GET /personas/:id serves capability records to the runner", async () => {
+    const persona = await deps.personas.create({
+      name: "Caps",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { vaultWrite: true },
+    });
+    const res = await request(app).get(`/personas/${persona.id}`);
+    expect(res.body.persona.capabilities.vaultWrite).toBe(true);
+  });
+
+  it("PATCH /personas/:id accepts only sharedMemory (save_memory tool)", async () => {
+    const persona = await deps.personas.create({ name: "M", model: "anthropic:claude-sonnet-5" });
+    expect(
+      (await request(app).patch(`/personas/${persona.id}`).send({ personality: "hack" })).status,
+    ).toBe(400);
     const res = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "a helpful persona" });
-    expect(res.status).toBe(201);
-    expect(res.body.conversation).toMatchObject({ name: "Haiku", personality: "a helpful persona" });
-  });
-
-  it("POST /conversations returns the existing conversation on a repeat name", async () => {
-    const first = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "a helpful persona" });
-    const second = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "ignored, already exists" });
-    expect(second.status).toBe(200);
-    expect(second.body.conversation.id).toBe(first.body.conversation.id);
-    expect(second.body.conversation.personality).toBe("a helpful persona");
-  });
-
-  it("POST /conversations rejects a missing name", async () => {
-    const res = await request(app).post("/conversations").send({});
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /conversations/:id/notify sends a push, stores the message, and returns 200 once subscribed", async () => {
-    await store.save(validSubscription);
-    const created = await request(app)
-      .post("/conversations")
-      .send({ name: "Haiku", personality: "a helpful persona" });
-    const res = await request(app)
-      .post(`/conversations/${created.body.conversation.id}/notify`)
-      .send({ text: "hi" });
+      .patch(`/personas/${persona.id}`)
+      .send({ sharedMemory: "learned something" });
     expect(res.status).toBe(200);
-    expect(webPush.sendNotification).toHaveBeenCalledWith(
+    expect((await deps.personas.get(persona.id))?.sharedMemory).toBe("learned something");
+  });
+
+  it("PATCH /heartbeats/:id records run bookkeeping and clears forceRun", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb",
+      personaId: "p",
+      conversationId: "c",
+      schedule: "every@1h",
+    });
+    await deps.heartbeats.update(heartbeat.id, { forceRun: true });
+    const res = await request(app).patch(`/heartbeats/${heartbeat.id}`).send({
+      forceRun: false,
+      lastRunAt: "2026-07-22T09:00:00.000Z",
+      lastResult: "replied 88 chars",
+    });
+    expect(res.status).toBe(200);
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.forceRun).toBe(false);
+    expect(reloaded?.lastResult).toBe("replied 88 chars");
+  });
+
+  it("POST /audit records entries", async () => {
+    const res = await request(app).post("/audit").send({
+      personaName: "Marcus",
+      conversationId: "c1",
+      capability: "heartbeat",
+      detail: "Morning check-in",
+    });
+    expect(res.status).toBe(201);
+    expect((await deps.audit.list())[0].capability).toBe("heartbeat");
+  });
+
+  it("POST /conversations/:id/notify honors an explicit sender for multi-persona turns", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Multi", "");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "hi from listener", sender: "Gemini" });
+    expect(res.status).toBe(200);
+    expect(res.body.message.sender).toBe("Gemini");
+    expect(deps.webPush.sendNotification).toHaveBeenCalledWith(
       validSubscription,
       JSON.stringify({
-        title: "Haiku",
-        body: "hi",
-        conversationId: created.body.conversation.id,
+        title: "Gemini",
+        body: "hi from listener",
+        conversationId: conversation.id,
       }),
     );
-    expect(res.body.message).toMatchObject({ sender: "Haiku", text: "hi" });
   });
 
-  it("POST /conversations/:id/notify 404s for an unknown id", async () => {
-    const res = await request(app).post("/conversations/nope/notify").send({ text: "hi" });
-    expect(res.status).toBe(404);
-  });
-
-  it("POST /conversations/:id/notify rejects a missing text field", async () => {
-    const created = await request(app).post("/conversations").send({ name: "Haiku" });
+  it("POST /conversations/:id/notify defaults sender to the conversation name", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Haiku", "");
     const res = await request(app)
-      .post(`/conversations/${created.body.conversation.id}/notify`)
-      .send({});
-    expect(res.status).toBe(400);
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "hi" });
+    expect(res.body.message.sender).toBe("Haiku");
   });
 
-  it("PATCH /conversations/:id is also mounted internally (used to backfill model/thinking)", async () => {
-    const created = await request(app).post("/conversations").send({ name: "Haiku" });
-    const res = await request(app)
-      .patch(`/conversations/${created.body.conversation.id}`)
-      .send({ model: "anthropic:claude-sonnet-5" });
+  it("legacy POST /notify lands in the Main conversation with a push (ADR 0008)", async () => {
+    await deps.store.save(validSubscription);
+    const res = await request(app).post("/notify").send({ persona: "Marcus", text: "yo" });
     expect(res.status).toBe(200);
-    expect(res.body.conversation.model).toBe("anthropic:claude-sonnet-5");
+    const main = await deps.conversations.findByName("Main");
+    expect(main?.messages).toMatchObject([{ sender: "Marcus", text: "yo" }]);
+  });
+
+  it("POST /conversations/:id/notify still records the message when no subscription exists", async () => {
+    const conversation = await deps.conversations.create("NoSub", "");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "recorded anyway" });
+    expect(res.status).toBe(404);
+    expect((await deps.conversations.get(conversation.id))?.messages).toHaveLength(1);
   });
 });

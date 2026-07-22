@@ -5,130 +5,196 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }
 
-// Everything sent from this device is /reply, always attributed to "Edvard"
-// server-side — used here purely to decide which side a message renders
-// on, not as any kind of auth.
+// Everything sent from this device is attributed to "Edvard" server-side —
+// used here purely for rendering sides, not as any kind of auth.
 const MY_SENDER = "Edvard";
 const POLL_INTERVAL_MS = 3000;
-// "Retry with a different provider" (Feature-Ideas.md #31, Edvard's own
-// reframing away from silent auto-fallback): the architecture has no error
-// signal at all when a reply doesn't show up (fire-and-forget /reply,
-// async poll-based runner) — this is a timeout heuristic, not real failure
-// detection. Long enough that ordinary replies never trip it.
+// Timeout heuristic for the "no reply yet — retry" banner; the async
+// runner publishes no error signal, so this is inference, not detection.
 const RETRY_OFFER_MS = 45000;
 
-const statusEl = document.getElementById("status");
-const messagesEl = document.getElementById("messages");
-const headerTitle = document.getElementById("header-title");
-const drawerOpenBtn = document.getElementById("drawer-open");
-const drawerCloseBtn = document.getElementById("drawer-close");
-const drawerScrim = document.getElementById("drawer-scrim");
-const drawer = document.getElementById("drawer");
-const drawerSearchInput = document.getElementById("drawer-search-input");
-const drawerSearchResults = document.getElementById("drawer-search-results");
-const drawerListWrap = document.getElementById("drawer-list-wrap");
-const drawerList = document.getElementById("drawer-list");
-const drawerNewChat = document.getElementById("drawer-new-chat");
-const themeToggle = document.getElementById("theme-toggle");
-const headerNewChatBtn = document.getElementById("header-new-chat");
-const headerOverflowBtn = document.getElementById("header-overflow");
+const $ = (id) => document.getElementById(id);
 
-const actionSheetScrim = document.getElementById("action-sheet-scrim");
-const actionSheetTitle = document.getElementById("action-sheet-title");
-const sheetEdit = document.getElementById("sheet-edit");
-const sheetArchive = document.getElementById("sheet-archive");
-const sheetArchiveLabel = document.getElementById("sheet-archive-label");
-const sheetDelete = document.getElementById("sheet-delete");
-const sheetMainModel = document.getElementById("sheet-main-model");
+const statusEl = $("status");
+const messagesEl = $("messages");
+const headerTitle = $("header-title");
+const headerSubtitle = $("header-subtitle");
+const drawerOpenBtn = $("drawer-open");
+const drawerCloseBtn = $("drawer-close");
+const drawerScrim = $("drawer-scrim");
+const drawer = $("drawer");
+const drawerSearchInput = $("drawer-search-input");
+const drawerSearchResults = $("drawer-search-results");
+const drawerListWrap = $("drawer-list-wrap");
+const drawerList = $("drawer-list");
+const drawerNewChat = $("drawer-new-chat");
+const themeToggle = $("theme-toggle");
+const headerNewChatBtn = $("header-new-chat");
+const headerOverflowBtn = $("header-overflow");
+const navPersonas = $("nav-personas");
+const navHeartbeats = $("nav-heartbeats");
+const navAudit = $("nav-audit");
 
-const mainModelModalScrim = document.getElementById("main-model-modal-scrim");
-const mainModelModal = document.getElementById("main-model-modal");
-const mainModelSelect = document.getElementById("main-model-select");
-const mainModelStatus = document.getElementById("main-model-status");
-const mainModelCancel = document.getElementById("main-model-cancel");
+const actionSheetScrim = $("action-sheet-scrim");
+const actionSheetTitle = $("action-sheet-title");
+const sheetEdit = $("sheet-edit");
+const sheetAsk = $("sheet-ask");
+const sheetPause = $("sheet-pause");
+const sheetPauseLabel = $("sheet-pause-label");
+const sheetArchive = $("sheet-archive");
+const sheetArchiveLabel = $("sheet-archive-label");
+const sheetDelete = $("sheet-delete");
 
-const editModalScrim = document.getElementById("edit-modal-scrim");
-const editModal = document.getElementById("edit-modal");
-const editName = document.getElementById("edit-name");
-const editTemplateRow = document.getElementById("edit-template-row");
-const editPersonality = document.getElementById("edit-personality");
-const editModel = document.getElementById("edit-model");
-const editBadge = document.getElementById("edit-badge");
-const editThinkingRow = document.getElementById("edit-thinking-row");
-const editThinking = document.getElementById("edit-thinking");
-const editStatus = document.getElementById("edit-status");
-const editCancel = document.getElementById("edit-cancel");
+const msgActionSheetScrim = $("msg-action-sheet-scrim");
+const msgActionSheet = $("msg-action-sheet");
+const msgSheetCopy = $("msg-sheet-copy");
+const msgSheetSpeak = $("msg-sheet-speak");
+const msgSheetEdit = $("msg-sheet-edit");
+const msgSheetRegen = $("msg-sheet-regen");
+const msgSheetFork = $("msg-sheet-fork");
+const msgSheetForget = $("msg-sheet-forget");
+const msgSheetForgetLabel = $("msg-sheet-forget-label");
+const msgSheetDelete = $("msg-sheet-delete");
 
-const newChatModalScrim = document.getElementById("new-chat-modal-scrim");
-const newChatModal = document.getElementById("new-chat-modal");
-const newChatName = document.getElementById("new-chat-name");
-const newChatTemplateRow = document.getElementById("new-chat-template-row");
-const newChatPersonality = document.getElementById("new-chat-personality");
-const newChatModel = document.getElementById("new-chat-model");
-const newChatBadge = document.getElementById("new-chat-badge");
-const newChatThinkingRow = document.getElementById("new-chat-thinking-row");
-const newChatThinking = document.getElementById("new-chat-thinking");
-const newChatStatus = document.getElementById("new-chat-status");
-const newChatCancel = document.getElementById("new-chat-cancel");
+const editModalScrim = $("edit-modal-scrim");
+const editModal = $("edit-modal");
+const editName = $("edit-name");
+const editPersonality = $("edit-personality");
+const editModel = $("edit-model");
+const editBadge = $("edit-badge");
+const editThinkingRow = $("edit-thinking-row");
+const editThinking = $("edit-thinking");
+const editMemory = $("edit-memory");
+const editParticipants = $("edit-participants");
+const editAddPersona = $("edit-add-persona");
+const editAddPersonaBtn = $("edit-add-persona-btn");
+const editStatus = $("edit-status");
+const editCancel = $("edit-cancel");
 
-const msgActionSheetScrim = document.getElementById("msg-action-sheet-scrim");
-const msgActionSheet = document.getElementById("msg-action-sheet");
-const msgSheetCopy = document.getElementById("msg-sheet-copy");
-const msgSheetEdit = document.getElementById("msg-sheet-edit");
-const msgSheetRegen = document.getElementById("msg-sheet-regen");
-const msgSheetFork = document.getElementById("msg-sheet-fork");
-const msgSheetDelete = document.getElementById("msg-sheet-delete");
+const newChatModalScrim = $("new-chat-modal-scrim");
+const newChatModal = $("new-chat-modal");
+const newChatName = $("new-chat-name");
+const newChatPersonaSource = $("new-chat-persona-source");
+const newChatInlineFields = $("new-chat-inline-fields");
+const newChatTemplateRow = $("new-chat-template-row");
+const newChatPersonality = $("new-chat-personality");
+const newChatModel = $("new-chat-model");
+const newChatBadge = $("new-chat-badge");
+const newChatThinkingRow = $("new-chat-thinking-row");
+const newChatThinking = $("new-chat-thinking");
+const newChatStatus = $("new-chat-status");
+const newChatCancel = $("new-chat-cancel");
 
-const replyForm = document.getElementById("reply-form");
-const replyInput = document.getElementById("reply-text");
-const plusButton = document.getElementById("plus-button");
-const attachFileInput = document.getElementById("attach-file-input");
-const attachChipRow = document.getElementById("attach-chip-row");
-const attachMenu = document.getElementById("attach-menu");
-const attachMenuCamera = document.getElementById("attach-menu-camera");
-const attachMenuPhotos = document.getElementById("attach-menu-photos");
-const attachMenuFiles = document.getElementById("attach-menu-files");
+const askModalScrim = $("ask-modal-scrim");
+const askModal = $("ask-modal");
+const askText = $("ask-text");
+const askAnswer = $("ask-answer");
+const askStatus = $("ask-status");
+const askCancel = $("ask-cancel");
 
-// null = the original global thread ("Main" in the drawer). A string id
-// means a conversation created via POST /conversations. Seeded from the
-// URL so a cold-opened notification (no window was already running) lands
-// on the right conversation instead of defaulting to Main — see sw.js's
-// notificationclick, which builds this URL.
+const personaStudioScrim = $("persona-studio-scrim");
+const personaStudioList = $("persona-studio-list");
+const personaStudioAdd = $("persona-studio-add");
+const personaStudioClose = $("persona-studio-close");
+
+const personaFormScrim = $("persona-form-scrim");
+const personaForm = $("persona-form");
+const personaFormTitle = $("persona-form-title");
+const personaFormName = $("persona-form-name");
+const personaFormTemplateRow = $("persona-form-template-row");
+const personaFormPersonality = $("persona-form-personality");
+const personaFormModel = $("persona-form-model");
+const personaFormBadge = $("persona-form-badge");
+const personaFormThinkingRow = $("persona-form-thinking-row");
+const personaFormThinking = $("persona-form-thinking");
+const personaFormMemory = $("persona-form-memory");
+const personaFormTemplate = $("persona-form-template");
+const personaFormPreviewText = $("persona-form-preview-text");
+const personaFormPreviewBtn = $("persona-form-preview-btn");
+const personaFormPreviewOut = $("persona-form-preview-out");
+const personaFormStatus = $("persona-form-status");
+const personaFormCancel = $("persona-form-cancel");
+const capWebSearch = $("cap-webSearch");
+const capVaultRead = $("cap-vaultRead");
+const capVaultWrite = $("cap-vaultWrite");
+const capCodeExecution = $("cap-codeExecution");
+
+const heartbeatStudioScrim = $("heartbeat-studio-scrim");
+const heartbeatStudioList = $("heartbeat-studio-list");
+const heartbeatStudioAdd = $("heartbeat-studio-add");
+const heartbeatStudioClose = $("heartbeat-studio-close");
+
+const heartbeatFormScrim = $("heartbeat-form-scrim");
+const heartbeatForm = $("heartbeat-form");
+const heartbeatFormTitle = $("heartbeat-form-title");
+const heartbeatFormName = $("heartbeat-form-name");
+const heartbeatFormPersona = $("heartbeat-form-persona");
+const heartbeatFormConversation = $("heartbeat-form-conversation");
+const heartbeatFormScheduleType = $("heartbeat-form-schedule-type");
+const heartbeatFormTime = $("heartbeat-form-time");
+const heartbeatFormInterval = $("heartbeat-form-interval");
+const heartbeatFormUnit = $("heartbeat-form-unit");
+const heartbeatFormTask = $("heartbeat-form-task");
+const heartbeatFormVaultPaths = $("heartbeat-form-vault-paths");
+const heartbeatFormEnabled = $("heartbeat-form-enabled");
+const heartbeatFormStatus = $("heartbeat-form-status");
+const heartbeatFormCancel = $("heartbeat-form-cancel");
+
+const auditScrim = $("audit-scrim");
+const auditList = $("audit-list");
+const auditClose = $("audit-close");
+
+const pausedBanner = $("paused-banner");
+const pausedResume = $("paused-resume");
+const mentionBar = $("mention-bar");
+const replyForm = $("reply-form");
+const replyInput = $("reply-text");
+const plusButton = $("plus-button");
+const micButton = $("mic-button");
+const attachFileInput = $("attach-file-input");
+const attachChipRow = $("attach-chip-row");
+const attachMenu = $("attach-menu");
+const attachMenuCamera = $("attach-menu-camera");
+const attachMenuPhotos = $("attach-menu-photos");
+const attachMenuFiles = $("attach-menu-files");
+
+// --- State -----------------------------------------------------------------
+// Since ADR 0008 (Main is a real conversation) there is no null special
+// case: null just means "nothing selected yet" (fresh install / all
+// archived) and renders a hint instead of a thread.
 let currentConversationId = new URLSearchParams(location.search).get("conversation") || null;
+let currentDetail = null;
 let renderedKey = "";
 let modelCatalogById = new Map();
+let latestModels = [];
 let allConversations = [];
-// Which conversation the open action sheet/edit modal applies to — usually
-// currentConversationId, but a drawer row's own "⋮" can target a
-// conversation without switching to it first.
+let allPersonas = [];
 let sheetTargetId = null;
+let editLinks = [];
+let editingMessageId = null;
+let lastRenderedMessages = [];
+let messageActionTarget = null;
+let personaFormEditId = null;
+let heartbeatFormEditId = null;
 
-const PERSONALITY_TEMPLATES = [
-  { name: "Trainer", text: "You are a supportive but honest fitness/training coach. Be direct about what's working and what isn't, celebrate real progress, and never sugarcoat a missed session." },
-  { name: "Study buddy", text: "You are a patient study partner. Ask questions that check real understanding rather than just confirming what was said, and suggest what to review next." },
-  { name: "Devil's advocate", text: "You push back on every claim with the strongest reasonable counterargument, even ones you don't fully believe, to stress-test thinking before a decision is made." },
-  { name: "Plain assistant", text: "You are a helpful, concise assistant. Answer directly, ask for clarification only when genuinely needed." },
-];
-
-// --- Theme ------------------------------------------------------------
+// --- Theme -----------------------------------------------------------------
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("agora-theme", theme);
 }
 applyTheme(localStorage.getItem("agora-theme") || "dark");
 themeToggle.addEventListener("click", () => {
-  const current = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
-  applyTheme(current);
+  applyTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light");
 });
 
-// --- Unread badge -------------------------------------------------------
+// --- Unread badge ----------------------------------------------------------
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && navigator.clearAppBadge) {
     navigator.clearAppBadge().catch(() => {});
   }
 });
 
-// --- Minimal, safe markdown ---------------------------------------------
+// --- Minimal, safe markdown -------------------------------------------------
 function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
@@ -138,18 +204,14 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
-// Placeholder uses \0 so it can never collide with real prose the way a
-// plain " 3 " token could (an earlier version of this function used that
-// and would have silently corrupted any message containing an ordinary
-// number like "3 reps" by splicing in an unrelated stashed code block).
+// \0-delimited placeholder — can never collide with real prose the way a
+// bare number token could (a bug an earlier version actually had).
 const CODE_BLOCK_PLACEHOLDER = (i) => `\0CODEBLOCK${i}\0`;
 const CODE_BLOCK_PLACEHOLDER_RE = /\0CODEBLOCK(\d+)\0/g;
 
 function renderMarkdown(text) {
   const escaped = escapeHtml(text);
   const codeBlocks = [];
-  // Fenced code blocks first (so ** or _ inside them isn't touched below),
-  // stashed and restored after the rest of the substitutions run.
   let withPlaceholders = escaped.replace(/```([\s\S]*?)```/g, (_m, code) => {
     codeBlocks.push(`<pre><code>${code}</code></pre>`);
     return CODE_BLOCK_PLACEHOLDER(codeBlocks.length - 1);
@@ -158,53 +220,109 @@ function renderMarkdown(text) {
     .replace(/`([^`\n]+?)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "<em>$1</em>")
-    // Only http(s) links — escapeHtml already ran, so the URL text here
-    // can't contain a raw quote/angle-bracket to break out of the attribute.
     .replace(/\[([^\]\n]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  // Restore code blocks LAST, after paragraph-splitting and newline-to-<br>
-  // conversion — the placeholder token has no newlines of its own, so a
-  // multi-line code block's real newlines survive untouched inside <pre>
-  // instead of being turned into <br>.
+  // Code blocks restored LAST so their real newlines survive the <br> pass.
   const paragraphs = withPlaceholders
     .split(/\n{2,}/)
     .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
     .join("");
-  const withCode = paragraphs.replace(CODE_BLOCK_PLACEHOLDER_RE, (_m, i) => codeBlocks[Number(i)]);
-  return withCode || "<p></p>";
+  return paragraphs.replace(CODE_BLOCK_PLACEHOLDER_RE, (_m, i) => codeBlocks[Number(i)]) || "<p></p>";
 }
 
-function messagesEndpoint() {
-  return currentConversationId ? `/conversations/${currentConversationId}/messages` : "/messages";
-}
-
-function replyEndpoint() {
-  return currentConversationId ? `/conversations/${currentConversationId}/reply` : "/reply";
-}
-
-function messageEndpoint(messageId) {
-  return currentConversationId
-    ? `/conversations/${currentConversationId}/messages/${messageId}`
-    : `/messages/${messageId}`;
-}
-
-function setStatus(text) {
-  if (!text) {
-    statusEl.classList.remove("visible");
-    statusEl.textContent = "";
-    return;
-  }
-  statusEl.textContent = text;
-  statusEl.classList.add("visible");
+function setStatus(text, ms = 2500) {
+  statusEl.textContent = text || "";
+  statusEl.classList.toggle("visible", Boolean(text));
+  if (text && ms) setTimeout(() => statusEl.classList.remove("visible"), ms);
 }
 
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// --- Drawer -----------------------------------------------------------
+// --- API helpers ------------------------------------------------------------
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    // non-JSON error body — leave data empty
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// --- Data loading -----------------------------------------------------------
+async function loadConversationList() {
+  const { ok, data } = await api("GET", "/conversations");
+  if (!ok) return;
+  allConversations = data.conversations;
+  renderDrawerList();
+}
+
+async function loadPersonas() {
+  const { ok, data } = await api("GET", "/personas");
+  if (!ok) return;
+  allPersonas = data.personas;
+}
+
+async function loadModelCatalog() {
+  const { ok, data } = await api("GET", "/models");
+  if (!ok) return;
+  latestModels = data.models;
+  modelCatalogById = new Map(data.models.map((m) => [m.id, m]));
+  for (const select of [newChatModel, editModel, personaFormModel]) populateModelSelect(select);
+  updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
+  updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+  updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+}
+
+function populateModelSelect(select) {
+  const previous = select.value;
+  select.innerHTML = "";
+  const groups = new Map();
+  for (const model of latestModels) {
+    if (!groups.has(model.provider)) {
+      const group = document.createElement("optgroup");
+      group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
+      groups.set(model.provider, group);
+      select.appendChild(group);
+    }
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.label;
+    groups.get(model.provider).appendChild(option);
+  }
+  if (previous && modelCatalogById.has(previous)) select.value = previous;
+}
+
+function capabilityBadgeText(model) {
+  if (!model) return "";
+  const parts = [];
+  if (model.contextWindow) parts.push(model.contextWindow);
+  parts.push(model.supportsThinking ? "thinking-capable" : "no thinking");
+  return parts.join(" · ");
+}
+
+function updateThinkingVisibility(select, row, checkbox, badgeEl) {
+  const model = modelCatalogById.get(select.value);
+  const supportsThinking = Boolean(model && model.supportsThinking);
+  row.hidden = !supportsThinking;
+  if (!supportsThinking) checkbox.checked = false;
+  if (badgeEl) badgeEl.textContent = capabilityBadgeText(model);
+}
+newChatModel.addEventListener("change", () => updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge));
+editModel.addEventListener("change", () => updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge));
+personaFormModel.addEventListener("change", () => updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge));
+
+// --- Drawer ------------------------------------------------------------------
 function openDrawer() {
   drawer.hidden = false;
   drawerScrim.hidden = false;
+  loadConversationList();
 }
 function closeDrawer() {
   drawer.hidden = true;
@@ -217,75 +335,79 @@ drawerOpenBtn.addEventListener("click", openDrawer);
 drawerCloseBtn.addEventListener("click", closeDrawer);
 drawerScrim.addEventListener("click", closeDrawer);
 
-function renderDrawerRow(id, name, archived) {
+function renderDrawerRow(conversation, forked) {
   const row = document.createElement("div");
-  row.className = `drawer-row ${id === currentConversationId ? "active" : ""}`;
+  row.className =
+    `drawer-row ${conversation.id === currentConversationId ? "active" : ""} ${forked ? "forked" : ""}`;
   const nameEl = document.createElement("span");
   nameEl.className = "drawer-row-name";
-  // Archived conversations only ever appear here via search (Feature-
-  // Ideas.md #81 — hidden from the default list, not deleted) — labeled
-  // so "how do I find it again to unarchive it" has an actual answer.
-  nameEl.textContent = archived ? `${name} · Archived` : name;
+  nameEl.textContent = (forked ? "↳ " : "") + conversation.name + (conversation.archived ? " · Archived" : "");
   row.appendChild(nameEl);
-  row.addEventListener("click", () => switchConversation(id));
-  if (id !== null) {
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "drawer-row-more";
-    more.textContent = "⋮";
-    more.title = "Conversation actions";
-    more.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openActionSheet(id, name);
-    });
-    row.appendChild(more);
+  if (conversation.status === "paused") {
+    const badge = document.createElement("span");
+    badge.className = "drawer-row-badge";
+    badge.textContent = "⏸";
+    row.appendChild(badge);
   }
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "drawer-row-more";
+  more.textContent = "⋮";
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openActionSheet(conversation.id, conversation.name);
+  });
+  row.appendChild(more);
+  row.addEventListener("click", () => switchConversation(conversation.id));
   return row;
+}
+
+function renderDrawerList() {
+  drawerList.innerHTML = "";
+  // Group by lineage (rootId, Decisions/0004): root first, its forks
+  // indented under it; groups ordered by their most recent activity.
+  const groups = new Map();
+  for (const conversation of allConversations) {
+    if (conversation.archived) continue;
+    const key = conversation.rootId || conversation.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(conversation);
+  }
+  const ordered = [...groups.values()].sort((a, b) => {
+    const latest = (g) => Math.max(...g.map((c) => Date.parse(c.lastMessageAt || c.createdAt || 0)));
+    return latest(b) - latest(a);
+  });
+  for (const group of ordered) {
+    group.sort((a, b) => {
+      if (a.id === (a.rootId || a.id) && a.rootId === a.id) return -1;
+      return Date.parse(b.lastMessageAt || 0) - Date.parse(a.lastMessageAt || 0);
+    });
+    const root = group.find((c) => c.id === c.rootId);
+    if (root) drawerList.appendChild(renderDrawerRow(root, false));
+    for (const conversation of group) {
+      if (root && conversation.id === root.id) continue;
+      drawerList.appendChild(renderDrawerRow(conversation, Boolean(root)));
+    }
+  }
+  if (!drawerList.children.length) {
+    const hint = document.createElement("div");
+    hint.className = "studio-empty";
+    hint.textContent = "No conversations yet — create one!";
+    drawerList.appendChild(hint);
+  }
 }
 
 async function switchConversation(id) {
   currentConversationId = id;
+  currentDetail = null;
   editingMessageId = null;
   renderedKey = "";
   closeDrawer();
-  updateHeaderControls();
   await fetchMessages();
+  renderDrawerList();
 }
 
-async function loadConversationList() {
-  try {
-    const res = await fetch("/conversations");
-    if (!res.ok) return;
-    const { conversations } = await res.json();
-    allConversations = conversations;
-    renderDrawerList(conversations);
-    updateHeaderControls();
-  } catch {
-    // transient network hiccup — leave the drawer as-is
-  }
-}
-
-function renderDrawerList(conversations) {
-  drawerList.innerHTML = "";
-  drawerList.appendChild(renderDrawerRow(null, "Main"));
-  // Archived conversations are hidden from the drawer, not deleted
-  // (Feature-Ideas.md #81) — still reachable via search.
-  for (const conversation of conversations) {
-    if (conversation.archived) continue;
-    drawerList.appendChild(renderDrawerRow(conversation.id, conversation.name));
-  }
-}
-
-function updateHeaderControls() {
-  if (!currentConversationId) {
-    headerTitle.textContent = "Main";
-    return;
-  }
-  const known = allConversations.find((c) => c.id === currentConversationId);
-  if (known) headerTitle.textContent = known.name;
-}
-
-// --- Drawer search (conversation names client-side + message content via API) --
+// --- Drawer search -----------------------------------------------------------
 let searchDebounce;
 drawerSearchInput.addEventListener("input", () => {
   const q = drawerSearchInput.value.trim();
@@ -302,132 +424,211 @@ drawerSearchInput.addEventListener("input", () => {
 
 async function runSearch(q) {
   drawerSearchResults.innerHTML = "";
-
-  // Archived conversations ARE included here (unlike the default drawer
-  // list) — search is the only way back to one once it's archived, so
-  // excluding it here would make archiving a one-way trip.
-  const nameMatches = allConversations.filter((c) =>
-    c.name.toLowerCase().includes(q.toLowerCase()),
-  );
+  // Name matches include archived conversations — search is the only way
+  // back to one, excluding them would make archiving a one-way trip.
+  const nameMatches = allConversations.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()));
   if (nameMatches.length > 0) {
     const label = document.createElement("div");
     label.className = "drawer-section-label";
     label.textContent = "Conversations";
     drawerSearchResults.appendChild(label);
-    for (const match of nameMatches) {
-      drawerSearchResults.appendChild(renderDrawerRow(match.id, match.name, match.archived));
-    }
+    for (const match of nameMatches) drawerSearchResults.appendChild(renderDrawerRow(match, false));
   }
-
-  try {
-    const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
-    if (!res.ok) return;
-    const { results } = await res.json();
-    if (results.length === 0) return;
-    const label = document.createElement("div");
-    label.className = "drawer-section-label";
-    label.textContent = "Messages";
-    drawerSearchResults.appendChild(label);
-    for (const result of results.slice(0, 30)) {
-      const item = document.createElement("div");
-      item.className = "search-hit";
-      const nameEl = document.createElement("span");
-      nameEl.className = "hit-name";
-      nameEl.textContent = result.conversationName;
-      const textEl = document.createElement("span");
-      textEl.textContent = result.message.text.slice(0, 140);
-      item.append(nameEl, textEl);
-      item.addEventListener("click", () => switchConversation(result.conversationId));
-      drawerSearchResults.appendChild(item);
-    }
-  } catch {
-    // transient network hiccup — name matches above still work
+  const { ok, data } = await api("GET", `/search?q=${encodeURIComponent(q)}`);
+  if (!ok || !data.results.length) return;
+  const label = document.createElement("div");
+  label.className = "drawer-section-label";
+  label.textContent = "Messages";
+  drawerSearchResults.appendChild(label);
+  for (const result of data.results.slice(0, 30)) {
+    const item = document.createElement("div");
+    item.className = "search-hit";
+    const nameEl = document.createElement("span");
+    nameEl.className = "hit-name";
+    nameEl.textContent = result.conversationName;
+    const textEl = document.createElement("span");
+    textEl.textContent = result.message.text.slice(0, 140);
+    item.append(nameEl, textEl);
+    item.addEventListener("click", () => switchConversation(result.conversationId));
+    drawerSearchResults.appendChild(item);
   }
 }
 
-// --- Action sheet -------------------------------------------------------
-// id === null means "Main" — the legacy global thread has no backend
-// conversation record, so rename/archive/delete don't apply to it; it only
-// gets the default-model row instead of the usual three.
+// --- Conversation action sheet ------------------------------------------------
 function openActionSheet(id, name) {
   sheetTargetId = id;
   actionSheetTitle.textContent = name;
-  const isMain = id === null;
-  sheetEdit.hidden = isMain;
-  sheetArchive.hidden = isMain;
-  sheetDelete.hidden = isMain;
-  sheetMainModel.hidden = !isMain;
-  if (!isMain) {
-    const conversation = allConversations.find((c) => c.id === id);
-    sheetArchiveLabel.textContent = conversation && conversation.archived ? "Unarchive" : "Archive";
-  }
+  const conversation = allConversations.find((c) => c.id === id);
+  sheetArchiveLabel.textContent = conversation?.archived ? "Unarchive" : "Archive";
+  sheetPauseLabel.textContent = conversation?.status === "paused" ? "Resume replies" : "Pause replies";
   actionSheetScrim.hidden = false;
 }
 function closeActionSheet() {
   actionSheetScrim.hidden = true;
 }
-actionSheetScrim.addEventListener("click", (event) => {
-  if (event.target === actionSheetScrim) closeActionSheet();
+actionSheetScrim.addEventListener("click", (e) => {
+  if (e.target === actionSheetScrim) closeActionSheet();
 });
 headerOverflowBtn.addEventListener("click", () => {
-  openActionSheet(currentConversationId, headerTitle.textContent);
+  if (!currentConversationId) return;
+  openActionSheet(currentConversationId, currentDetail?.name || "Conversation");
+});
+
+sheetPause.addEventListener("click", async () => {
+  const id = sheetTargetId;
+  closeActionSheet();
+  const conversation = allConversations.find((c) => c.id === id);
+  const status = conversation?.status === "paused" ? "active" : "paused";
+  await api("PATCH", `/conversations/${id}`, { status });
+  await loadConversationList();
+  if (id === currentConversationId) {
+    renderedKey = "";
+    await fetchMessages();
+  }
 });
 
 sheetArchive.addEventListener("click", async () => {
-  if (!sheetTargetId) return;
-  const conversation = allConversations.find((c) => c.id === sheetTargetId);
-  const archived = !(conversation && conversation.archived);
-  await fetch(`/conversations/${sheetTargetId}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ archived }),
-  });
+  const id = sheetTargetId;
   closeActionSheet();
-  if (archived && sheetTargetId === currentConversationId) {
+  const conversation = allConversations.find((c) => c.id === id);
+  await api("PATCH", `/conversations/${id}`, { archived: !conversation?.archived });
+  if (!conversation?.archived && id === currentConversationId) {
     currentConversationId = null;
+    currentDetail = null;
     renderedKey = "";
-    updateHeaderControls();
-    await fetchMessages();
   }
   await loadConversationList();
+  autoSelectConversation();
+  fetchMessages();
 });
 
 sheetDelete.addEventListener("click", async () => {
-  if (!sheetTargetId) return;
-  if (!confirm("Delete this conversation? This can't be undone.")) return;
-  await fetch(`/conversations/${sheetTargetId}`, { method: "DELETE" });
+  const id = sheetTargetId;
   closeActionSheet();
-  if (sheetTargetId === currentConversationId) {
+  if (!confirm("Delete this conversation? This can't be undone.")) return;
+  const { ok, status, data } = await api("DELETE", `/conversations/${id}`);
+  if (!ok && status === 409) {
+    setStatus(`Has heartbeats (${(data.heartbeats || []).join(", ")}) — delete those first.`, 5000);
+    return;
+  }
+  if (id === currentConversationId) {
     currentConversationId = null;
+    currentDetail = null;
     renderedKey = "";
-    updateHeaderControls();
-    await fetchMessages();
   }
   await loadConversationList();
+  autoSelectConversation();
+  fetchMessages();
+});
+
+sheetAsk.addEventListener("click", () => {
+  const id = sheetTargetId;
+  closeActionSheet();
+  if (id !== currentConversationId) switchConversation(id);
+  askText.value = "";
+  askAnswer.hidden = true;
+  askStatus.textContent = "";
+  askModalScrim.hidden = false;
+  askText.focus();
+});
+
+// --- Ask modal ---------------------------------------------------------------
+askModalScrim.addEventListener("click", (e) => {
+  if (e.target === askModalScrim) askModalScrim.hidden = true;
+});
+askCancel.addEventListener("click", () => {
+  askModalScrim.hidden = true;
+});
+askModal.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = askText.value.trim();
+  if (!text || !currentConversationId) return;
+  askStatus.textContent = "Thinking… (this can take a while)";
+  askAnswer.hidden = true;
+  const { ok, status, data } = await api("POST", `/conversations/${currentConversationId}/ask`, { text });
+  if (!ok) {
+    askStatus.textContent = status === 503 ? "Runner not configured." : "Failed — try again.";
+    return;
+  }
+  askStatus.textContent = "";
+  askAnswer.textContent = data.reply;
+  askAnswer.hidden = false;
+});
+
+// --- Edit conversation modal ---------------------------------------------------
+function renderEditParticipants() {
+  editParticipants.innerHTML = "";
+  for (const link of editLinks) {
+    const row = document.createElement("div");
+    row.className = "participant-row";
+    const name = document.createElement("span");
+    name.className = "p-name";
+    name.textContent = link.name;
+    const role = document.createElement("span");
+    role.className = "p-role";
+    role.textContent = link.role;
+    row.append(name, role);
+    if (link.role !== "curator") {
+      const promote = document.createElement("button");
+      promote.type = "button";
+      promote.textContent = "Make curator";
+      promote.title = "Handoff — this persona becomes the default responder";
+      promote.addEventListener("click", () => {
+        for (const l of editLinks) l.role = l === link ? "curator" : "listener";
+        renderEditParticipants();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        editLinks = editLinks.filter((l) => l !== link);
+        renderEditParticipants();
+      });
+      row.append(promote, remove);
+    }
+    editParticipants.appendChild(row);
+  }
+  editAddPersona.innerHTML = "";
+  const inUse = new Set(editLinks.map((l) => l.personaId));
+  for (const persona of allPersonas) {
+    if (persona.isTemplate || inUse.has(persona.id)) continue;
+    const option = document.createElement("option");
+    option.value = persona.id;
+    option.textContent = persona.name;
+    editAddPersona.appendChild(option);
+  }
+  editAddPersonaBtn.disabled = !editAddPersona.children.length;
+}
+
+editAddPersonaBtn.addEventListener("click", () => {
+  const personaId = editAddPersona.value;
+  const persona = allPersonas.find((p) => p.id === personaId);
+  if (!persona) return;
+  editLinks.push({ personaId, role: editLinks.length ? "listener" : "curator", name: persona.name });
+  renderEditParticipants();
 });
 
 sheetEdit.addEventListener("click", async () => {
-  if (!sheetTargetId) return;
+  const id = sheetTargetId;
   closeActionSheet();
-  try {
-    const res = await fetch(`/conversations/${sheetTargetId}/messages`);
-    if (!res.ok) return;
-    const conversation = await res.json();
-    editModal.dataset.targetId = sheetTargetId;
-    editName.value = conversation.name;
-    editPersonality.value = conversation.personality || "";
-    editModel.value = conversation.model;
-    editThinking.checked = Boolean(conversation.thinking);
-    updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
-    editStatus.textContent = "";
-    editModalScrim.hidden = false;
-  } catch {
-    setStatus("Failed to load conversation.");
-  }
+  await loadPersonas();
+  const { ok, data } = await api("GET", `/conversations/${id}/messages?limit=1`);
+  if (!ok) return;
+  editModal.dataset.targetId = id;
+  editName.value = data.name;
+  editPersonality.value = data.personality || "";
+  editModel.value = data.model;
+  editThinking.checked = Boolean(data.thinking);
+  editMemory.value = data.memory || "";
+  editLinks = (data.personas || []).map((p) => ({ ...p }));
+  renderEditParticipants();
+  updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+  editStatus.textContent = "";
+  editModalScrim.hidden = false;
 });
 
-editModalScrim.addEventListener("click", (event) => {
-  if (event.target === editModalScrim) editModalScrim.hidden = true;
+editModalScrim.addEventListener("click", (e) => {
+  if (e.target === editModalScrim) editModalScrim.hidden = true;
 });
 editCancel.addEventListener("click", () => {
   editModalScrim.hidden = true;
@@ -436,65 +637,80 @@ editModal.addEventListener("submit", async (event) => {
   event.preventDefault();
   const targetId = editModal.dataset.targetId;
   if (!targetId) return;
-  editStatus.textContent = "Saving...";
-  try {
-    const res = await fetch(`/conversations/${targetId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: editName.value.trim(),
-        personality: editPersonality.value.trim(),
-        model: editModel.value,
-        thinking: editThinkingRow.hidden ? false : editThinking.checked,
-      }),
-    });
-    if (!res.ok) {
-      editStatus.textContent = "Failed to save.";
-      return;
+  // Shared-entity warning (Architecture §4a): personality/model edits go to
+  // the curator persona, which may serve several conversations.
+  const curator = editLinks.find((l) => l.role === "curator");
+  if (curator) {
+    const usedBy = allConversations.filter((c) =>
+      (c.personas || []).some((p) => p.personaId === curator.personaId),
+    );
+    if (usedBy.length > 1) {
+      const names = usedBy.map((c) => c.name).join(", ");
+      if (!confirm(`"${curator.name}" is used by ${usedBy.length} conversations (${names}). Personality/model edits apply to all of them. Continue?`)) {
+        return;
+      }
     }
-    editModalScrim.hidden = true;
-    await loadConversationList();
-    updateHeaderControls();
-  } catch {
-    editStatus.textContent = "Failed to save.";
   }
+  editStatus.textContent = "Saving...";
+  const { ok, data } = await api("PATCH", `/conversations/${targetId}`, {
+    name: editName.value.trim(),
+    personality: editPersonality.value,
+    model: editModel.value,
+    thinking: editThinkingRow.hidden ? false : editThinking.checked,
+    memory: editMemory.value,
+    personas: editLinks.map(({ personaId, role }) => ({ personaId, role })),
+  });
+  if (!ok) {
+    editStatus.textContent = data.error || "Failed to save.";
+    return;
+  }
+  editModalScrim.hidden = true;
+  await loadConversationList();
+  renderedKey = "";
+  fetchMessages();
 });
 
-// --- Main's default model (localStorage-backed — Main has no backend
-// conversation record to store a model field on, unlike named conversations,
-// so this is the client-side equivalent of that field for the legacy
-// thread). Read by the replyForm submit handler further down. ---------------
-const MAIN_DEFAULT_MODEL_KEY = "agora-main-default-model";
-function getMainDefaultModel() {
-  const stored = localStorage.getItem(MAIN_DEFAULT_MODEL_KEY);
-  // Guard against a stale id from a model that's since been removed from
-  // MODEL_CATALOG — sending an unknown id would 400 the whole /reply call.
-  return stored && modelCatalogById.has(stored) ? stored : undefined;
+// --- New conversation ----------------------------------------------------------
+function renderNewChatPersonaSource() {
+  newChatPersonaSource.innerHTML = "";
+  const fresh = document.createElement("option");
+  fresh.value = "";
+  fresh.textContent = "New persona (define below)";
+  newChatPersonaSource.appendChild(fresh);
+  for (const persona of allPersonas) {
+    if (persona.isTemplate) continue;
+    const option = document.createElement("option");
+    option.value = persona.id;
+    option.textContent = `Existing: ${persona.name}`;
+    newChatPersonaSource.appendChild(option);
+  }
+  newChatInlineFields.style.display = "flex";
+}
+newChatPersonaSource.addEventListener("change", () => {
+  newChatInlineFields.style.display = newChatPersonaSource.value ? "none" : "flex";
+});
+
+function renderTemplateChips(container, applyTemplate) {
+  container.innerHTML = "";
+  for (const template of allPersonas.filter((p) => p.isTemplate)) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "template-chip";
+    chip.textContent = template.name;
+    chip.addEventListener("click", () => applyTemplate(template));
+    container.appendChild(chip);
+  }
 }
 
-sheetMainModel.addEventListener("click", () => {
-  closeActionSheet();
-  populateModelSelect(mainModelSelect, latestModelList);
-  const current = getMainDefaultModel();
-  if (current) mainModelSelect.value = current;
-  mainModelStatus.textContent = "";
-  mainModelModalScrim.hidden = false;
-});
-mainModelModalScrim.addEventListener("click", (event) => {
-  if (event.target === mainModelModalScrim) mainModelModalScrim.hidden = true;
-});
-mainModelCancel.addEventListener("click", () => {
-  mainModelModalScrim.hidden = true;
-});
-mainModelModal.addEventListener("submit", (event) => {
-  event.preventDefault();
-  localStorage.setItem(MAIN_DEFAULT_MODEL_KEY, mainModelSelect.value);
-  mainModelModalScrim.hidden = true;
-});
-
-// --- New chat modal -------------------------------------------------------
-function openNewChatModal() {
+async function openNewChatModal() {
   closeDrawer();
+  await loadPersonas();
+  renderNewChatPersonaSource();
+  renderTemplateChips(newChatTemplateRow, (template) => {
+    newChatPersonality.value = template.personality;
+    newChatModel.value = template.model;
+    updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
+  });
   newChatName.value = "";
   newChatPersonality.value = "";
   newChatThinking.checked = false;
@@ -504,8 +720,8 @@ function openNewChatModal() {
 }
 drawerNewChat.addEventListener("click", openNewChatModal);
 headerNewChatBtn.addEventListener("click", openNewChatModal);
-newChatModalScrim.addEventListener("click", (event) => {
-  if (event.target === newChatModalScrim) newChatModalScrim.hidden = true;
+newChatModalScrim.addEventListener("click", (e) => {
+  if (e.target === newChatModalScrim) newChatModalScrim.hidden = true;
 });
 newChatCancel.addEventListener("click", () => {
   newChatModalScrim.hidden = true;
@@ -514,171 +730,495 @@ newChatModal.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = newChatName.value.trim();
   if (!name) return;
-  const personality = newChatPersonality.value.trim();
-  const model = newChatModel.value || undefined;
-  const thinking = newChatThinkingRow.hidden ? false : newChatThinking.checked;
-
   newChatStatus.textContent = "Creating...";
-  try {
-    const res = await fetch("/conversations", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, personality, model, thinking }),
-    });
-    if (!res.ok) {
-      newChatStatus.textContent = "Failed to create.";
+  const body = newChatPersonaSource.value
+    ? { name, personaId: newChatPersonaSource.value }
+    : {
+        name,
+        personality: newChatPersonality.value.trim(),
+        model: newChatModel.value,
+        thinking: newChatThinkingRow.hidden ? false : newChatThinking.checked,
+      };
+  const { ok, data } = await api("POST", "/conversations", body);
+  if (!ok) {
+    newChatStatus.textContent = data.error || "Failed to create.";
+    return;
+  }
+  newChatModalScrim.hidden = true;
+  await loadConversationList();
+  await switchConversation(data.conversation.id);
+});
+
+// --- Persona Creator Studio ------------------------------------------------
+function personaMeta(persona) {
+  const model = modelCatalogById.get(persona.model);
+  const caps = persona.capabilities || {};
+  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution"]
+    .filter((c) => caps[c])
+    .map((c) => ({ webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code" }[c]));
+  return `${model ? model.label : persona.model}${enabled.length ? " · " + enabled.join(", ") : ""}`;
+}
+
+async function openPersonaStudio() {
+  closeDrawer();
+  await Promise.all([loadPersonas(), loadConversationList()]);
+  renderPersonaStudio();
+  personaStudioScrim.hidden = false;
+}
+navPersonas.addEventListener("click", openPersonaStudio);
+personaStudioClose.addEventListener("click", () => {
+  personaStudioScrim.hidden = true;
+});
+personaStudioScrim.addEventListener("click", (e) => {
+  if (e.target === personaStudioScrim) personaStudioScrim.hidden = true;
+});
+
+function renderPersonaStudio() {
+  personaStudioList.innerHTML = "";
+  const sections = [
+    ["Your personas", allPersonas.filter((p) => !p.isTemplate)],
+    ["Templates", allPersonas.filter((p) => p.isTemplate)],
+  ];
+  for (const [label, list] of sections) {
+    if (!list.length) continue;
+    const header = document.createElement("div");
+    header.className = "drawer-section-label";
+    header.textContent = label;
+    personaStudioList.appendChild(header);
+    for (const persona of list) {
+      personaStudioList.appendChild(renderPersonaRow(persona));
+    }
+  }
+  if (!allPersonas.length) {
+    const empty = document.createElement("div");
+    empty.className = "studio-empty";
+    empty.textContent = "No personas yet.";
+    personaStudioList.appendChild(empty);
+  }
+}
+
+function renderPersonaRow(persona) {
+  const row = document.createElement("div");
+  row.className = "studio-item";
+  const main = document.createElement("div");
+  main.className = "studio-item-main";
+  const name = document.createElement("span");
+  name.className = "studio-item-name";
+  name.textContent = persona.name;
+  const meta = document.createElement("span");
+  meta.className = "studio-item-meta";
+  meta.textContent = personaMeta(persona);
+  main.append(name, meta);
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "studio-item-actions";
+  const clone = document.createElement("button");
+  clone.type = "button";
+  clone.textContent = "Clone";
+  clone.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await api("POST", `/personas/${persona.id}/clone`, {});
+    await loadPersonas();
+    renderPersonaStudio();
+  });
+  const del = document.createElement("button");
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete persona "${persona.name}"?`)) return;
+    const { ok, status, data } = await api("DELETE", `/personas/${persona.id}`);
+    if (!ok && status === 409) {
+      const refs = [...(data.conversations || []), ...(data.heartbeats || [])].join(", ");
+      setStatus(`In use by: ${refs}. Detach it first.`, 5000);
       return;
     }
-    const { conversation } = await res.json();
-    newChatModalScrim.hidden = true;
-    await loadConversationList();
-    await switchConversation(conversation.id);
-  } catch {
-    newChatStatus.textContent = "Failed to create.";
-  }
-});
-
-// --- Personality templates (shared by both modals) ------------------------
-function renderTemplateRow(container, targetTextarea) {
-  container.innerHTML = "";
-  for (const template of PERSONALITY_TEMPLATES) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "template-chip";
-    chip.textContent = template.name;
-    chip.addEventListener("click", () => {
-      targetTextarea.value = template.text;
-    });
-    container.appendChild(chip);
-  }
-}
-renderTemplateRow(newChatTemplateRow, newChatPersonality);
-renderTemplateRow(editTemplateRow, editPersonality);
-
-// --- Model catalog --------------------------------------------------------
-function capabilityBadgeText(model) {
-  if (!model) return "";
-  const parts = [];
-  if (model.contextWindow) parts.push(model.contextWindow);
-  parts.push(model.supportsThinking ? "thinking-capable" : "no thinking");
-  return parts.join(" · ");
-}
-
-function populateModelSelect(select, models) {
-  select.innerHTML = "";
-  const groups = new Map();
-  for (const model of models) {
-    if (!groups.has(model.provider)) {
-      const group = document.createElement("optgroup");
-      group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
-      groups.set(model.provider, group);
-      select.appendChild(group);
-    }
-    const option = document.createElement("option");
-    option.value = model.id;
-    option.textContent = model.label;
-    groups.get(model.provider).appendChild(option);
-  }
-}
-
-let latestModelList = [];
-async function loadModelCatalog() {
-  try {
-    const res = await fetch("/models");
-    if (!res.ok) return;
-    const { models } = await res.json();
-    modelCatalogById = new Map(models.map((model) => [model.id, model]));
-    latestModelList = models;
-
-    for (const select of [newChatModel, editModel]) {
-      populateModelSelect(select, models);
-    }
-
-    updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
-    updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
-  } catch {
-    // transient network hiccup — modals just won't have model options yet
-  }
-}
-
-function updateThinkingVisibility(select, row, checkbox, badgeEl) {
-  const model = modelCatalogById.get(select.value);
-  const supportsThinking = Boolean(model && model.supportsThinking);
-  row.hidden = !supportsThinking;
-  if (!supportsThinking) checkbox.checked = false;
-  if (badgeEl) badgeEl.textContent = capabilityBadgeText(model);
-}
-newChatModel.addEventListener("change", () =>
-  updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge),
-);
-editModel.addEventListener("change", () =>
-  updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge),
-);
-
-// --- Attach files (UI-only — no upload endpoint exists yet, see the submit
-// handler below) ------------------------------------------------------------
-let stagedFiles = [];
-
-plusButton.addEventListener("click", (event) => {
-  event.stopPropagation();
-  attachMenu.hidden = !attachMenu.hidden;
-});
-document.addEventListener("click", (event) => {
-  if (!attachMenu.hidden && !attachMenu.contains(event.target) && event.target !== plusButton) {
-    attachMenu.hidden = true;
-  }
-});
-
-// One shared file input, reconfigured per row rather than three separate
-// inputs — capture/accept only matter at the moment .click() opens the
-// native picker, so setting them just before that is enough.
-function openFilePicker({ accept = "", capture = "" } = {}) {
-  attachFileInput.accept = accept;
-  if (capture) attachFileInput.setAttribute("capture", capture);
-  else attachFileInput.removeAttribute("capture");
-  attachMenu.hidden = true;
-  attachFileInput.click();
-}
-attachMenuCamera.addEventListener("click", () => openFilePicker({ accept: "image/*", capture: "environment" }));
-attachMenuPhotos.addEventListener("click", () => openFilePicker({ accept: "image/*" }));
-attachMenuFiles.addEventListener("click", () => openFilePicker());
-
-attachFileInput.addEventListener("change", () => {
-  stagedFiles.push(...attachFileInput.files);
-  attachFileInput.value = ""; // allow re-selecting the same filename later
-  renderAttachChips();
-});
-
-function renderAttachChips() {
-  attachChipRow.innerHTML = "";
-  attachChipRow.hidden = stagedFiles.length === 0;
-  stagedFiles.forEach((file, index) => {
-    const chip = document.createElement("span");
-    chip.className = "attach-chip";
-    const name = document.createElement("span");
-    name.className = "attach-chip-name";
-    name.textContent = file.name;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "attach-chip-remove";
-    remove.textContent = "✕";
-    remove.title = "Remove";
-    remove.addEventListener("click", () => {
-      stagedFiles.splice(index, 1);
-      renderAttachChips();
-    });
-    chip.append(name, remove);
-    attachChipRow.appendChild(chip);
+    await loadPersonas();
+    renderPersonaStudio();
   });
+  actions.append(clone, del);
+  row.appendChild(actions);
+  row.addEventListener("click", () => openPersonaForm(persona));
+  return row;
 }
 
-// --- Messages rendering -----------------------------------------------------
-let editingMessageId = null;
-let lastRenderedMessages = [];
+personaStudioAdd.addEventListener("click", () => openPersonaForm(null));
+
+function openPersonaForm(persona) {
+  personaFormEditId = persona ? persona.id : null;
+  personaFormTitle.textContent = persona ? `Edit ${persona.name}` : "New persona";
+  personaFormName.value = persona?.name || "";
+  personaFormPersonality.value = persona?.personality || "";
+  if (persona?.model && modelCatalogById.has(persona.model)) personaFormModel.value = persona.model;
+  personaFormThinking.checked = Boolean(persona?.thinking);
+  const caps = persona?.capabilities || { webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false };
+  capWebSearch.checked = Boolean(caps.webSearch);
+  capVaultRead.checked = Boolean(caps.vaultRead);
+  capVaultWrite.checked = Boolean(caps.vaultWrite);
+  capCodeExecution.checked = Boolean(caps.codeExecution);
+  personaFormMemory.value = persona?.sharedMemory || "";
+  personaFormTemplate.checked = Boolean(persona?.isTemplate);
+  personaFormPreviewText.value = "";
+  personaFormPreviewOut.hidden = true;
+  personaFormStatus.textContent = "";
+  renderTemplateChips(personaFormTemplateRow, (template) => {
+    personaFormPersonality.value = template.personality;
+    personaFormModel.value = template.model;
+    updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+  });
+  updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+  personaFormScrim.hidden = false;
+}
+
+personaFormScrim.addEventListener("click", (e) => {
+  if (e.target === personaFormScrim) personaFormScrim.hidden = true;
+});
+personaFormCancel.addEventListener("click", () => {
+  personaFormScrim.hidden = true;
+});
+
+personaFormPreviewBtn.addEventListener("click", async () => {
+  const text = personaFormPreviewText.value.trim();
+  if (!text) return;
+  personaFormStatus.textContent = "Previewing… (nothing is saved)";
+  personaFormPreviewOut.hidden = true;
+  const { ok, status, data } = await api("POST", "/personas/preview", {
+    personality: personaFormPersonality.value,
+    model: personaFormModel.value,
+    thinking: personaFormThinkingRow.hidden ? false : personaFormThinking.checked,
+    text,
+  });
+  personaFormStatus.textContent = ok ? "" : status === 503 ? "Runner not configured." : "Preview failed.";
+  if (ok) {
+    personaFormPreviewOut.textContent = data.reply;
+    personaFormPreviewOut.hidden = false;
+  }
+});
+
+personaForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = personaFormName.value.trim();
+  if (!name) return;
+  if (personaFormEditId) {
+    const usedBy = allConversations.filter((c) =>
+      (c.personas || []).some((p) => p.personaId === personaFormEditId),
+    );
+    if (usedBy.length > 1) {
+      if (!confirm(`This persona is used by ${usedBy.length} conversations — edits apply to all of them. (Clone instead for a divergent copy.) Continue?`)) {
+        return;
+      }
+    }
+  }
+  const body = {
+    name,
+    personality: personaFormPersonality.value,
+    model: personaFormModel.value,
+    thinking: personaFormThinkingRow.hidden ? false : personaFormThinking.checked,
+    capabilities: {
+      webSearch: capWebSearch.checked,
+      vaultRead: capVaultRead.checked,
+      vaultWrite: capVaultWrite.checked,
+      codeExecution: capCodeExecution.checked,
+    },
+    sharedMemory: personaFormMemory.value,
+    isTemplate: personaFormTemplate.checked,
+  };
+  personaFormStatus.textContent = "Saving...";
+  const { ok, data } = personaFormEditId
+    ? await api("PATCH", `/personas/${personaFormEditId}`, body)
+    : await api("POST", "/personas", body);
+  if (!ok) {
+    personaFormStatus.textContent = data.error || "Failed to save.";
+    return;
+  }
+  personaFormScrim.hidden = true;
+  await loadPersonas();
+  renderPersonaStudio();
+});
+
+// --- Heartbeat Creator Studio ------------------------------------------------
+async function openHeartbeatStudio() {
+  closeDrawer();
+  await Promise.all([loadPersonas(), loadConversationList()]);
+  await renderHeartbeatStudio();
+  heartbeatStudioScrim.hidden = false;
+}
+navHeartbeats.addEventListener("click", openHeartbeatStudio);
+heartbeatStudioClose.addEventListener("click", () => {
+  heartbeatStudioScrim.hidden = true;
+});
+heartbeatStudioScrim.addEventListener("click", (e) => {
+  if (e.target === heartbeatStudioScrim) heartbeatStudioScrim.hidden = true;
+});
+
+async function renderHeartbeatStudio() {
+  const { ok, data } = await api("GET", "/heartbeats");
+  heartbeatStudioList.innerHTML = "";
+  if (!ok) return;
+  if (!data.heartbeats.length) {
+    const empty = document.createElement("div");
+    empty.className = "studio-empty";
+    empty.textContent = "No heartbeats yet. A heartbeat is a scheduled persona turn in a conversation — with its own task prompt and vault context.";
+    heartbeatStudioList.appendChild(empty);
+    return;
+  }
+  for (const heartbeat of data.heartbeats) {
+    heartbeatStudioList.appendChild(renderHeartbeatRow(heartbeat));
+  }
+}
+
+function renderHeartbeatRow(heartbeat) {
+  const persona = allPersonas.find((p) => p.id === heartbeat.personaId);
+  const conversation = allConversations.find((c) => c.id === heartbeat.conversationId);
+  const row = document.createElement("div");
+  row.className = "studio-item";
+  const main = document.createElement("div");
+  main.className = "studio-item-main";
+  const name = document.createElement("span");
+  name.className = "studio-item-name";
+  name.textContent = `${heartbeat.enabled ? "" : "⏸ "}${heartbeat.name}`;
+  const meta = document.createElement("span");
+  meta.className = "studio-item-meta";
+  const last = heartbeat.lastRunAt
+    ? `last: ${new Date(heartbeat.lastRunAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${heartbeat.lastResult ? ` (${heartbeat.lastResult})` : ""}`
+    : "never run";
+  meta.textContent = `${heartbeat.schedule} · ${persona?.name || "?"} → ${conversation?.name || "?"} · ${last}`;
+  main.append(name, meta);
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "studio-item-actions";
+  const run = document.createElement("button");
+  run.type = "button";
+  run.textContent = "Run now";
+  run.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await api("POST", `/heartbeats/${heartbeat.id}/run`);
+    setStatus("Queued — runs within ~5s.");
+    setTimeout(renderHeartbeatStudio, 1500);
+  });
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.textContent = heartbeat.enabled ? "Disable" : "Enable";
+  toggle.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await api("PATCH", `/heartbeats/${heartbeat.id}`, { enabled: !heartbeat.enabled });
+    renderHeartbeatStudio();
+  });
+  const del = document.createElement("button");
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete heartbeat "${heartbeat.name}"?`)) return;
+    await api("DELETE", `/heartbeats/${heartbeat.id}`);
+    renderHeartbeatStudio();
+  });
+  actions.append(run, toggle, del);
+  row.appendChild(actions);
+  row.addEventListener("click", () => openHeartbeatForm(heartbeat));
+  return row;
+}
+
+heartbeatStudioAdd.addEventListener("click", () => openHeartbeatForm(null));
+
+heartbeatFormScheduleType.addEventListener("change", () => {
+  const daily = heartbeatFormScheduleType.value === "daily";
+  heartbeatFormTime.hidden = !daily;
+  heartbeatFormInterval.hidden = daily;
+  heartbeatFormUnit.hidden = daily;
+});
+
+function openHeartbeatForm(heartbeat) {
+  heartbeatFormEditId = heartbeat ? heartbeat.id : null;
+  heartbeatFormTitle.textContent = heartbeat ? `Edit ${heartbeat.name}` : "New heartbeat";
+  heartbeatFormName.value = heartbeat?.name || "";
+  heartbeatFormPersona.innerHTML = "";
+  for (const persona of allPersonas.filter((p) => !p.isTemplate)) {
+    const option = document.createElement("option");
+    option.value = persona.id;
+    option.textContent = persona.name;
+    heartbeatFormPersona.appendChild(option);
+  }
+  heartbeatFormConversation.innerHTML = "";
+  for (const conversation of allConversations) {
+    const option = document.createElement("option");
+    option.value = conversation.id;
+    option.textContent = conversation.name + (conversation.archived ? " (archived)" : "");
+    heartbeatFormConversation.appendChild(option);
+  }
+  if (heartbeat) {
+    heartbeatFormPersona.value = heartbeat.personaId;
+    heartbeatFormConversation.value = heartbeat.conversationId;
+    const schedule = heartbeat.schedule || "daily@08:00";
+    if (schedule.startsWith("daily@")) {
+      heartbeatFormScheduleType.value = "daily";
+      const time = schedule.slice("daily@".length);
+      heartbeatFormTime.value = time.length === 4 ? `0${time}` : time;
+    } else {
+      heartbeatFormScheduleType.value = "every";
+      const amount = schedule.slice("every@".length);
+      heartbeatFormInterval.value = amount.slice(0, -1);
+      heartbeatFormUnit.value = amount.slice(-1);
+    }
+  } else {
+    heartbeatFormScheduleType.value = "daily";
+    heartbeatFormTime.value = "08:00";
+  }
+  heartbeatFormScheduleType.dispatchEvent(new Event("change"));
+  heartbeatFormTask.value = heartbeat?.task || "";
+  heartbeatFormVaultPaths.value = (heartbeat?.vaultPaths || []).join("\n");
+  heartbeatFormEnabled.checked = heartbeat ? Boolean(heartbeat.enabled) : true;
+  heartbeatFormStatus.textContent = "";
+  heartbeatFormScrim.hidden = false;
+}
+
+heartbeatFormScrim.addEventListener("click", (e) => {
+  if (e.target === heartbeatFormScrim) heartbeatFormScrim.hidden = true;
+});
+heartbeatFormCancel.addEventListener("click", () => {
+  heartbeatFormScrim.hidden = true;
+});
+heartbeatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = heartbeatFormName.value.trim();
+  if (!name) return;
+  const schedule =
+    heartbeatFormScheduleType.value === "daily"
+      ? `daily@${heartbeatFormTime.value}`
+      : `every@${heartbeatFormInterval.value}${heartbeatFormUnit.value}`;
+  const body = {
+    name,
+    personaId: heartbeatFormPersona.value,
+    conversationId: heartbeatFormConversation.value,
+    schedule,
+    task: heartbeatFormTask.value,
+    vaultPaths: heartbeatFormVaultPaths.value
+      .split("\n")
+      .map((p) => p.trim())
+      .filter(Boolean),
+    enabled: heartbeatFormEnabled.checked,
+  };
+  heartbeatFormStatus.textContent = "Saving...";
+  const { ok, data } = heartbeatFormEditId
+    ? await api("PATCH", `/heartbeats/${heartbeatFormEditId}`, body)
+    : await api("POST", "/heartbeats", body);
+  if (!ok) {
+    heartbeatFormStatus.textContent = data.error || "Failed to save.";
+    return;
+  }
+  heartbeatFormScrim.hidden = true;
+  renderHeartbeatStudio();
+});
+
+// --- Activity (audit) --------------------------------------------------------
+navAudit.addEventListener("click", async () => {
+  closeDrawer();
+  const { ok, data } = await api("GET", "/audit?limit=100");
+  auditList.innerHTML = "";
+  if (ok) {
+    if (!data.entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "studio-empty";
+      empty.textContent = "No capability activity recorded yet.";
+      auditList.appendChild(empty);
+    }
+    for (const entry of data.entries) {
+      const row = document.createElement("div");
+      row.className = "studio-item";
+      const main = document.createElement("div");
+      main.className = "studio-item-main";
+      const name = document.createElement("span");
+      name.className = "studio-item-name";
+      name.textContent = `${entry.personaName} · ${entry.capability}`;
+      const meta = document.createElement("span");
+      meta.className = "studio-item-meta";
+      meta.textContent = `${new Date(entry.ts).toLocaleString()} — ${entry.detail}`;
+      main.append(name, meta);
+      row.appendChild(main);
+      auditList.appendChild(row);
+    }
+  }
+  auditScrim.hidden = false;
+});
+auditClose.addEventListener("click", () => {
+  auditScrim.hidden = true;
+});
+auditScrim.addEventListener("click", (e) => {
+  if (e.target === auditScrim) auditScrim.hidden = true;
+});
+
+// --- Messages ----------------------------------------------------------------
+function messagesEndpoint() {
+  return `/conversations/${currentConversationId}/messages?limit=200`;
+}
+function replyEndpoint() {
+  return `/conversations/${currentConversationId}/reply`;
+}
+function messageEndpoint(messageId) {
+  return `/conversations/${currentConversationId}/messages/${messageId}`;
+}
+
+function updateHeader() {
+  if (!currentDetail) {
+    headerTitle.childNodes[0].textContent = "Agora";
+    headerSubtitle.hidden = true;
+    pausedBanner.hidden = true;
+    return;
+  }
+  headerTitle.childNodes[0].textContent = currentDetail.name;
+  const personas = currentDetail.personas || [];
+  if (personas.length > 1) {
+    headerSubtitle.textContent = personas
+      .map((p) => (p.role === "curator" ? `${p.name}★` : p.name))
+      .join(" · ");
+    headerSubtitle.hidden = false;
+  } else {
+    const model = modelCatalogById.get(currentDetail.model);
+    headerSubtitle.textContent = model ? model.label : "";
+    headerSubtitle.hidden = !model;
+  }
+  pausedBanner.hidden = currentDetail.status !== "paused";
+}
+
+pausedResume.addEventListener("click", async () => {
+  if (!currentConversationId) return;
+  await api("PATCH", `/conversations/${currentConversationId}`, { status: "active" });
+  renderedKey = "";
+  await fetchMessages();
+  loadConversationList();
+});
+
+async function fetchMessages() {
+  if (!currentConversationId) {
+    messagesEl.innerHTML = "";
+    const empty = document.createElement("p");
+    empty.id = "empty";
+    empty.textContent = "Select or create a conversation from the menu.";
+    messagesEl.appendChild(empty);
+    updateHeader();
+    return;
+  }
+  const { ok, status, data } = await api("GET", messagesEndpoint());
+  if (!ok) {
+    if (status === 404) {
+      currentConversationId = null;
+      currentDetail = null;
+      fetchMessages();
+    }
+    return;
+  }
+  currentDetail = data;
+  updateHeader();
+  renderMessages(data.messages);
+}
 
 function renderMessages(messages) {
   lastRenderedMessages = messages;
-  const key = `${currentConversationId ?? "main"}:${messages.map((m) => `${m.id}:${m.text}`).join(",")}:${editingMessageId}`;
+  const key = `${currentConversationId}:${messages
+    .map((m) => `${m.id}:${m.text.length}:${m.forgotten ? 1 : 0}`)
+    .join(",")}:${editingMessageId}:${currentDetail?.status}`;
   if (key === renderedKey) {
     updateRetryBanner(messages);
     return;
@@ -700,7 +1240,6 @@ function renderMessages(messages) {
     });
   }
   updateRetryBanner(messages);
-
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -711,9 +1250,11 @@ function renderMessageBlock(message, isLast) {
 
   const meta = document.createElement("div");
   meta.className = "msg-meta";
-  const deliveredMark = mine ? " · sent" : "";
-  const overrideMark = message.modelOverride ? ` · ${message.modelOverride.split(":")[1] || message.modelOverride}` : "";
-  meta.textContent = `${message.sender} · ${formatTime(message.ts)}${deliveredMark}${overrideMark}`;
+  const overrideMark = message.modelOverride
+    ? ` · ${message.modelOverride.split(":")[1] || message.modelOverride}`
+    : "";
+  const forgottenMark = message.forgotten ? " · forgotten" : "";
+  meta.textContent = `${message.sender} · ${formatTime(message.ts)}${mine ? " · sent" : ""}${overrideMark}${forgottenMark}`;
   block.appendChild(meta);
 
   if (editingMessageId === message.id) {
@@ -722,7 +1263,6 @@ function renderMessageBlock(message, isLast) {
     editArea.value = message.text;
     editArea.rows = Math.min(8, Math.max(2, message.text.split("\n").length));
     block.appendChild(editArea);
-
     const actions = document.createElement("div");
     actions.className = "msg-edit-actions";
     const save = document.createElement("button");
@@ -731,11 +1271,7 @@ function renderMessageBlock(message, isLast) {
     save.addEventListener("click", async () => {
       const text = editArea.value.trim();
       if (!text) return;
-      await fetch(messageEndpoint(message.id), {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
+      await api("PATCH", messageEndpoint(message.id), { text });
       editingMessageId = null;
       renderedKey = "";
       fetchMessages();
@@ -754,28 +1290,22 @@ function renderMessageBlock(message, isLast) {
   }
 
   const body = document.createElement("div");
-  body.className = mine ? "msg-bubble mine" : "msg-plain";
+  body.className = (mine ? "msg-bubble mine" : "msg-plain") + (message.forgotten ? " msg-forgotten" : "");
   body.innerHTML = renderMarkdown(message.text);
   block.appendChild(body);
   attachLongPress(body, message, mine, isLast);
-
   return block;
 }
 
-// --- Long-press message action sheet ----------------------------------------
-// Replaces the old always-visible copy/edit/regenerate/delete icon row —
-// hold a message for 2s to get the same actions (plus Fork) as a bottom
-// sheet, matching the ChatGPT/Gemini mobile pattern. Pointer Events cover
-// touch + mouse + pen uniformly, no separate code paths needed.
+// --- Long-press message menu (Edvard's 2026-07-20 pattern, kept) -------------
 const LONG_PRESS_MS = 2000;
-const LONG_PRESS_MOVE_TOLERANCE = 10; // px — beyond this, treat it as a scroll/drag, not a hold
+const LONG_PRESS_MOVE_TOLERANCE = 10;
 let longPressTimer = null;
 let longPressStartPos = null;
-let messageActionTarget = null; // the message object the open sheet applies to
 
 function attachLongPress(el, message, mine, isLast) {
   const start = (event) => {
-    if (event.button !== undefined && event.button !== 0) return; // primary button/touch only
+    if (event.button !== undefined && event.button !== 0) return;
     longPressStartPos = { x: event.clientX, y: event.clientY };
     clearTimeout(longPressTimer);
     longPressTimer = setTimeout(() => {
@@ -799,15 +1329,9 @@ function attachLongPress(el, message, mine, isLast) {
   el.addEventListener("pointercancel", cancel);
   el.addEventListener("pointerleave", cancel);
   el.addEventListener("pointermove", move);
-  // A hold that fired the sheet shouldn't also pop a native context menu.
   el.addEventListener("contextmenu", (event) => event.preventDefault());
 }
 
-// Positions a floating menu card near wherever it was triggered from
-// (the long-pressed message) rather than a fixed spot — mirrors the
-// ChatGPT mobile reference, where these menus appear anchored to their
-// trigger. Clamped to the viewport so it can't render off-screen near an
-// edge, and flips above the anchor if there's no room below.
 function positionFloatingSheet(sheetEl, anchorRect) {
   const margin = 8;
   const sheetRect = sheetEl.getBoundingClientRect();
@@ -825,6 +1349,9 @@ function openMessageActionSheet(message, mine, isLast, anchorEl) {
   messageActionTarget = message;
   msgSheetEdit.hidden = !mine;
   msgSheetRegen.hidden = mine || !isLast;
+  msgSheetForgetLabel.textContent = message.forgotten
+    ? "Unforget (show to persona again)"
+    : "Forget (hide from persona)";
   msgActionSheetScrim.hidden = false;
   positionFloatingSheet(msgActionSheet, anchorEl.getBoundingClientRect());
 }
@@ -832,8 +1359,8 @@ function closeMessageActionSheet() {
   msgActionSheetScrim.hidden = true;
   messageActionTarget = null;
 }
-msgActionSheetScrim.addEventListener("click", (event) => {
-  if (event.target === msgActionSheetScrim) closeMessageActionSheet();
+msgActionSheetScrim.addEventListener("click", (e) => {
+  if (e.target === msgActionSheetScrim) closeMessageActionSheet();
 });
 
 msgSheetCopy.addEventListener("click", async () => {
@@ -844,8 +1371,16 @@ msgSheetCopy.addEventListener("click", async () => {
     await navigator.clipboard.writeText(message.text);
     setStatus("Copied.");
   } catch {
-    // clipboard permission denied or unavailable — no-op
+    // clipboard unavailable — no-op
   }
+});
+
+msgSheetSpeak.addEventListener("click", () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message || !("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(message.text));
 });
 
 msgSheetEdit.addEventListener("click", () => {
@@ -861,44 +1396,55 @@ msgSheetRegen.addEventListener("click", async () => {
   const message = messageActionTarget;
   closeMessageActionSheet();
   if (!message) return;
-  await fetch(messageEndpoint(message.id), { method: "DELETE" });
+  await api("DELETE", messageEndpoint(message.id));
   renderedKey = "";
   fetchMessages();
 });
 
-// Not implemented on the backend — no /fork route or branching data model
-// exists yet. Surfaced as a real row rather than hidden so it's
-// discoverable, but it's a stub until that's built (cf. RETRY_OFFER_MS
-// above for the same "stub with a clear comment" convention).
-msgSheetFork.addEventListener("click", () => {
+msgSheetFork.addEventListener("click", async () => {
+  const message = messageActionTarget;
   closeMessageActionSheet();
-  setStatus("Fork isn't built yet.");
+  if (!message || !currentConversationId) return;
+  const { ok, data } = await api("POST", `/conversations/${currentConversationId}/fork`, {
+    atMessageId: message.id,
+  });
+  if (!ok) {
+    setStatus("Fork failed.");
+    return;
+  }
+  await loadConversationList();
+  await switchConversation(data.conversation.id);
+  setStatus(`Forked into "${data.conversation.name}".`, 3500);
+});
+
+msgSheetForget.addEventListener("click", async () => {
+  const message = messageActionTarget;
+  closeMessageActionSheet();
+  if (!message) return;
+  await api("POST", `${messageEndpoint(message.id)}/forget`, { forgotten: !message.forgotten });
+  renderedKey = "";
+  fetchMessages();
 });
 
 msgSheetDelete.addEventListener("click", async () => {
   const message = messageActionTarget;
   closeMessageActionSheet();
   if (!message) return;
-  await fetch(messageEndpoint(message.id), { method: "DELETE" });
+  await api("DELETE", messageEndpoint(message.id));
   renderedKey = "";
   fetchMessages();
 });
 
-// --- "Waiting for a reply" + retry-with-a-different-provider ---------------
-// Both are heuristics off the same signal (last message is Edvard's,
-// unanswered), not a real typing/error event from the runner, which has no
-// way to publish either today. Tracked as a single "trailing status"
-// element regardless of which of the two it currently is, so every poll
-// replaces it instead of appending a duplicate.
+// --- Waiting/retry banner -----------------------------------------------------
 let trailingStatusEl = null;
 function updateRetryBanner(messages) {
   if (trailingStatusEl) {
     trailingStatusEl.remove();
     trailingStatusEl = null;
   }
-  if (messages.length === 0) return;
+  if (!messages.length || currentDetail?.status === "paused") return;
   const last = messages[messages.length - 1];
-  if (last.sender !== MY_SENDER) return;
+  if (last.sender !== MY_SENDER || last.forgotten) return;
 
   const waitedMs = Date.now() - new Date(last.ts).getTime();
   if (waitedMs < RETRY_OFFER_MS) {
@@ -909,12 +1455,11 @@ function updateRetryBanner(messages) {
     trailingStatusEl = indicator;
     return;
   }
-
   const banner = document.createElement("div");
   banner.className = "retry-banner";
   banner.textContent = "No reply yet. ";
   const select = document.createElement("select");
-  for (const model of modelCatalogById.values()) {
+  for (const model of latestModels) {
     const option = document.createElement("option");
     option.value = model.id;
     option.textContent = model.label;
@@ -924,12 +1469,8 @@ function updateRetryBanner(messages) {
   retry.type = "button";
   retry.textContent = "Retry";
   retry.addEventListener("click", async () => {
-    await fetch(messageEndpoint(last.id), { method: "DELETE" });
-    await fetch(replyEndpoint(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: last.text, model: select.value || undefined }),
-    });
+    await api("DELETE", messageEndpoint(last.id));
+    await api("POST", replyEndpoint(), { text: last.text, model: select.value || undefined });
     renderedKey = "";
     fetchMessages();
   });
@@ -938,73 +1479,126 @@ function updateRetryBanner(messages) {
   trailingStatusEl = banner;
 }
 
-async function fetchMessages() {
-  try {
-    const res = await fetch(messagesEndpoint());
-    if (!res.ok) return;
-    const data = await res.json();
-    renderMessages(data.messages);
-  } catch {
-    // transient network hiccup — the next poll retries
-  }
-}
-
-async function subscribeToPush() {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    setStatus("Push not supported here — chat still works.");
+// --- @mention autocomplete ----------------------------------------------------
+function updateMentionBar() {
+  const personas = currentDetail?.personas || [];
+  if (personas.length < 2) {
+    mentionBar.hidden = true;
     return;
   }
+  const caret = replyInput.selectionStart ?? replyInput.value.length;
+  const upToCaret = replyInput.value.slice(0, caret);
+  const match = upToCaret.match(/@([\w-]*)$/);
+  if (!match) {
+    mentionBar.hidden = true;
+    return;
+  }
+  const partial = match[1].toLowerCase();
+  const candidates = personas.filter((p) => p.name.toLowerCase().startsWith(partial));
+  mentionBar.innerHTML = "";
+  for (const candidate of candidates) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "mention-chip";
+    chip.textContent = `@${candidate.name}`;
+    chip.addEventListener("click", () => {
+      const before = upToCaret.slice(0, -1 - partial.length);
+      replyInput.value = `${before}@${candidate.name} ${replyInput.value.slice(caret)}`;
+      mentionBar.hidden = true;
+      replyInput.focus();
+    });
+    mentionBar.appendChild(chip);
+  }
+  mentionBar.hidden = candidates.length === 0;
+}
+replyInput.addEventListener("input", updateMentionBar);
+replyInput.addEventListener("click", updateMentionBar);
 
-  const registration = await navigator.serviceWorker.register("/sw.js");
-
-  navigator.serviceWorker.addEventListener("message", async (event) => {
-    if (!event.data || event.data.type !== "agora-push") return;
-    // conversationId is only present when the message came from an actual
-    // notification tap (see sw.js) — a background push while the tab is
-    // already open just refreshes the current view, it doesn't steal focus
-    // to a different conversation.
-    if (event.data.conversationId && event.data.conversationId !== currentConversationId) {
-      currentConversationId = event.data.conversationId;
-      await loadConversationList();
-      renderedKey = "";
+// --- Voice input (Web Speech API — feature-detected, Chrome/Android has it) ---
+const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+if (!SpeechRecognitionImpl) {
+  micButton.hidden = true;
+} else {
+  micButton.addEventListener("click", () => {
+    if (recognition) {
+      recognition.stop();
+      return;
     }
-    fetchMessages();
+    recognition = new SpeechRecognitionImpl();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    micButton.classList.add("recording");
+    recognition.addEventListener("result", (event) => {
+      const transcript = [...event.results].map((r) => r[0].transcript).join(" ");
+      replyInput.value = (replyInput.value ? replyInput.value + " " : "") + transcript;
+      autoGrow();
+    });
+    const done = () => {
+      micButton.classList.remove("recording");
+      recognition = null;
+    };
+    recognition.addEventListener("end", done);
+    recognition.addEventListener("error", done);
+    recognition.start();
   });
-
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    setStatus("Notifications off — chat still works here.");
-    return;
-  }
-
-  const keyRes = await fetch("/vapid-public-key");
-  if (!keyRes.ok) {
-    setStatus("Server isn't configured with VAPID keys yet.");
-    return;
-  }
-  const { publicKey } = await keyRes.json();
-
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
-  });
-
-  const res = await fetch("/subscribe", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(subscription.toJSON()),
-  });
-
-  setStatus(res.ok ? "" : "Failed to register for notifications.");
 }
 
-// --- Auto-growing textarea ------------------------------------------------
+// --- Attach stub (upload pipeline is explicitly not built yet) ----------------
+let stagedFiles = [];
+plusButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  attachMenu.hidden = !attachMenu.hidden;
+});
+document.addEventListener("click", (event) => {
+  if (!attachMenu.hidden && !attachMenu.contains(event.target) && event.target !== plusButton) {
+    attachMenu.hidden = true;
+  }
+});
+function openFilePicker({ accept = "", capture = "" } = {}) {
+  attachFileInput.accept = accept;
+  if (capture) attachFileInput.setAttribute("capture", capture);
+  else attachFileInput.removeAttribute("capture");
+  attachMenu.hidden = true;
+  attachFileInput.click();
+}
+attachMenuCamera.addEventListener("click", () => openFilePicker({ accept: "image/*", capture: "environment" }));
+attachMenuPhotos.addEventListener("click", () => openFilePicker({ accept: "image/*" }));
+attachMenuFiles.addEventListener("click", () => openFilePicker());
+attachFileInput.addEventListener("change", () => {
+  stagedFiles.push(...attachFileInput.files);
+  attachFileInput.value = "";
+  renderAttachChips();
+});
+function renderAttachChips() {
+  attachChipRow.innerHTML = "";
+  attachChipRow.hidden = stagedFiles.length === 0;
+  stagedFiles.forEach((file, index) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    const name = document.createElement("span");
+    name.className = "attach-chip-name";
+    name.textContent = file.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attach-chip-remove";
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => {
+      stagedFiles.splice(index, 1);
+      renderAttachChips();
+    });
+    chip.append(name, remove);
+    attachChipRow.appendChild(chip);
+  });
+}
+
+// --- Composer ------------------------------------------------------------------
 function autoGrow() {
   replyInput.style.height = "auto";
   replyInput.style.height = `${replyInput.scrollHeight}px`;
 }
 replyInput.addEventListener("input", autoGrow);
-
 replyInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -1015,24 +1609,19 @@ replyInput.addEventListener("keydown", (event) => {
 replyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = replyInput.value.trim();
-  if (!text) return;
-  const model = currentConversationId ? undefined : getMainDefaultModel();
+  if (!text || !currentConversationId) return;
   const hadStagedFiles = stagedFiles.length > 0;
   replyInput.value = "";
   autoGrow();
+  mentionBar.hidden = true;
   stagedFiles = [];
   renderAttachChips();
   replyInput.disabled = true;
   try {
-    await fetch(replyEndpoint(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, model }),
-    });
-    // No attachment upload route exists yet — staged files are UI-only for
-    // now, so say so explicitly rather than silently dropping what was
-    // attached.
-    if (hadStagedFiles) setStatus("File attachments aren't wired up yet — sent as text only.");
+    await api("POST", replyEndpoint(), { text });
+    if (hadStagedFiles) {
+      setStatus("File attachments aren't wired up yet — sent as text only.", 4000);
+    }
   } finally {
     replyInput.disabled = false;
     replyInput.focus();
@@ -1041,9 +1630,54 @@ replyForm.addEventListener("submit", async (event) => {
   fetchMessages();
 });
 
-updateHeaderControls();
-fetchMessages();
-loadConversationList();
-loadModelCatalog();
-setInterval(fetchMessages, POLL_INTERVAL_MS);
-subscribeToPush();
+// --- Push ----------------------------------------------------------------------
+async function subscribeToPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    setStatus("Push not supported here — chat still works.", 4000);
+    return;
+  }
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  navigator.serviceWorker.addEventListener("message", async (event) => {
+    if (!event.data || event.data.type !== "agora-push") return;
+    if (event.data.conversationId && event.data.conversationId !== currentConversationId) {
+      currentConversationId = event.data.conversationId;
+      renderedKey = "";
+      await loadConversationList();
+    }
+    fetchMessages();
+  });
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    setStatus("Notifications off — chat still works here.", 4000);
+    return;
+  }
+  const keyRes = await fetch("/vapid-public-key");
+  if (!keyRes.ok) return;
+  const { publicKey } = await keyRes.json();
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+  await fetch("/subscribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(subscription.toJSON()),
+  });
+}
+
+// --- Boot ----------------------------------------------------------------------
+function autoSelectConversation() {
+  if (currentConversationId) return;
+  const first = allConversations.find((c) => !c.archived);
+  if (first) currentConversationId = first.id;
+}
+
+async function boot() {
+  await Promise.all([loadModelCatalog(), loadConversationList(), loadPersonas()]);
+  autoSelectConversation();
+  await fetchMessages();
+  renderDrawerList();
+  setInterval(fetchMessages, POLL_INTERVAL_MS);
+  subscribeToPush();
+}
+boot();
