@@ -235,6 +235,22 @@ describe("agora public app", () => {
     expect(personas.some((p) => p.name === "Coach")).toBe(true);
   });
 
+  it("GET /conversations reflects live curator persona edits, not the stale inline fields (regression, 2026-07-22)", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "StaleCheck", personality: "old", model: "anthropic:claude-haiku-4-5-20251001" });
+    const personaId = created.body.conversation.personas[0].personaId;
+
+    // Edit the persona directly (as Persona Studio does), not through the
+    // conversation PATCH shim — this is exactly what went stale live.
+    await deps.personas.update(personaId, { model: "gemini:gemini-flash-latest", personality: "new" });
+
+    const list = await request(app).get("/conversations");
+    const entry = list.body.conversations.find((c: { id: string }) => c.id === created.body.conversation.id);
+    expect(entry.model).toBe("gemini:gemini-flash-latest");
+    expect(entry.personality).toBe("new");
+  });
+
   it("POST /conversations with personaId reuses an existing persona", async () => {
     const persona = await deps.personas.create({
       name: "Shared",
