@@ -12,18 +12,46 @@ export interface Message {
    * per-message override). The runner uses it for just this reply, never
    * persists it back onto the conversation's own `model` field. */
   modelOverride?: string;
+  /** "Forget this" (Feature-Ideas #24) — excluded from every LLM context
+   * the runner builds, still rendered (struck through) in the UI. */
+  forgotten?: boolean;
+}
+
+/** Exactly one "curator" per conversation; listeners reply only when
+ * @mentioned. Turn engine: Architecture §3. */
+export interface PersonaLink {
+  personaId: string;
+  role: "curator" | "listener";
 }
 
 export interface Conversation {
   id: string;
   name: string;
+  /** Legacy inline persona fields — superseded by `personas` after the
+   * one-time startup migration (see migrate.ts); kept in the type so old
+   * files parse and the migration can read them. API responses join the
+   * curator persona's live values instead. */
   personality: string;
-  /** "<provider>:<model id>", e.g. "anthropic:claude-haiku-4-5-20251001". */
   model: string;
   thinking: boolean;
+  /** Persona list — undefined only on records the startup migration
+   * hasn't rewritten yet (its "unmigrated" signal, deliberately NOT
+   * backfilled on read). */
+  personas?: PersonaLink[];
+  /** paused = the runner never replies here (also the auto-set state when
+   * the AI-AI turn cap trips — Architecture §3). */
+  status: "active" | "paused";
+  /** Per-conversation scratchpad, injected into the system prompt. */
+  memory: string;
+  /** Agent/search-only metadata — no human-facing editor (Decisions/0004). */
+  tags: string[];
   /** Hidden from the default switcher view, not deleted — Phase 5's
    * archive action. */
   archived: boolean;
+  /** Lineage id for fork grouping — equals `id` unless forked
+   * (Decisions/0004 amendment: group by lineage, not persona). */
+  rootId: string;
+  forkedFrom?: { conversationId: string; messageId: string };
   createdAt: string;
   messages: Message[];
 }
@@ -40,6 +68,11 @@ export interface ConversationUpdate {
   model?: string;
   thinking?: boolean;
   archived?: boolean;
+  personas?: PersonaLink[];
+  status?: "active" | "paused";
+  memory?: string;
+  tags?: string[];
+  rootId?: string;
 }
 
 export interface SearchResult {
@@ -141,19 +174,116 @@ export class ConversationStore {
     personality: string,
     model: string = DEFAULT_MODEL,
     thinking: boolean = DEFAULT_THINKING,
+    personas?: PersonaLink[],
   ): Promise<Conversation> {
+    const id = randomUUID();
     const conversation: Conversation = {
-      id: randomUUID(),
+      id,
       name,
       personality,
       model,
       thinking,
+      ...(personas ? { personas } : {}),
+      status: "active",
+      memory: "",
+      tags: [],
       archived: DEFAULT_ARCHIVED,
+      rootId: id,
       createdAt: new Date().toISOString(),
       messages: [],
     };
     await this.writeFile(conversation);
     return conversation;
+  }
+
+  /** Fork (Decisions/0004): a full persisted copy of persona links +
+   * messages up to (and including) `atMessageId`, same lineage `rootId`,
+   * with optional extra personas injected as listeners in the same call
+   * (the @mention flow's `addPersonas` fix from 0004's amendment). */
+  async fork(
+    id: string,
+    atMessageId?: string,
+    addPersonaIds?: string[],
+  ): Promise<Conversation | null> {
+    const source = await this.get(id);
+    if (!source) return null;
+    let messages = source.messages;
+    if (atMessageId) {
+      const index = source.messages.findIndex((m) => m.id === atMessageId);
+      if (index === -1) return null;
+      messages = source.messages.slice(0, index + 1);
+    }
+    const personas: PersonaLink[] = (source.personas ?? []).map((p) => ({ ...p }));
+    for (const personaId of addPersonaIds ?? []) {
+      if (!personas.some((p) => p.personaId === personaId)) {
+        personas.push({ personaId, role: "listener" });
+      }
+    }
+    // Name uniqueness is only cosmetic, but "X (fork)" colliding on a
+    // second fork of the same thread would be confusing in the drawer.
+    let name = `${source.name} (fork)`;
+    for (let n = 2; await this.findByName(name); n++) name = `${source.name} (fork ${n})`;
+
+    const newId = randomUUID();
+    const forked: Conversation = {
+      id: newId,
+      name,
+      personality: source.personality,
+      model: source.model,
+      thinking: source.thinking,
+      ...(source.personas ? { personas } : {}),
+      status: "active",
+      memory: source.memory,
+      tags: [...source.tags],
+      archived: false,
+      rootId: source.rootId,
+      forkedFrom: {
+        conversationId: source.id,
+        messageId: atMessageId ?? source.messages[source.messages.length - 1]?.id ?? "",
+      },
+      createdAt: new Date().toISOString(),
+      messages: messages.map((m) => ({ ...m })),
+    };
+    await this.enqueueWrite(forked);
+    return forked;
+  }
+
+  /** Bulk-append used only by the one-time startup migration (importing
+   * the legacy Main thread) — per-message appendMessage would re-read and
+   * rewrite the file once per historical message. */
+  async importMessages(id: string, imported: Message[]): Promise<boolean> {
+    const write = this.writeQueue.then(async () => {
+      const conversation = await this.get(id);
+      if (!conversation) return false;
+      conversation.messages.push(...imported.map((m) => ({ ...m })));
+      await this.writeFile(conversation);
+      return true;
+    });
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  /** "Forget this" — toggles a message out of (or back into) every LLM
+   * context the runner builds; the message itself stays. */
+  async setForgotten(id: string, messageId: string, forgotten: boolean): Promise<boolean> {
+    const write = this.writeQueue.then(async () => {
+      const conversation = await this.get(id);
+      if (!conversation) return false;
+      const message = conversation.messages.find((m) => m.id === messageId);
+      if (!message) return false;
+      if (forgotten) message.forgotten = true;
+      else delete message.forgotten;
+      await this.writeFile(conversation);
+      return true;
+    });
+    this.writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  private async enqueueWrite(conversation: Conversation): Promise<void> {
+    const write = this.writeQueue.then(() => this.writeFile(conversation));
+    this.writeQueue = write.catch(() => undefined);
+    await write;
   }
 
   async appendMessage(
@@ -269,6 +399,13 @@ export class ConversationStore {
       conversation.model ??= DEFAULT_MODEL;
       conversation.thinking ??= DEFAULT_THINKING;
       conversation.archived ??= DEFAULT_ARCHIVED;
+      conversation.status ??= "active";
+      conversation.memory ??= "";
+      conversation.tags ??= [];
+      conversation.rootId ??= conversation.id;
+      // Deliberately NOT backfilling `personas` — its absence is how the
+      // startup migration recognizes an unmigrated record (critique #7:
+      // no record creation as a side effect of reads).
       return conversation;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
