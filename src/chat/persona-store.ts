@@ -10,6 +10,13 @@ export interface PersonaCapabilities {
   vaultRead: boolean;
   vaultWrite: boolean;
   codeExecution: boolean;
+  /** Read-only cluster introspection via the runner's kubectl_read tool
+   * (get/describe/logs/top; Secrets refused at both the tool and RBAC
+   * level). Issues.md #3. */
+  kubectlRead: boolean;
+  /** Read-only GitHub queries via the runner's github_read tool
+   * (issues/PRs/runs/releases; GET-only for `gh api`). Issues.md #3. */
+  githubRead: boolean;
 }
 
 export interface Persona {
@@ -45,6 +52,8 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   vaultRead: true,
   vaultWrite: false,
   codeExecution: false,
+  kubectlRead: false,
+  githubRead: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as

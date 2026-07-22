@@ -11,6 +11,7 @@ import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
 import { HeartbeatStore } from "./chat/heartbeat-store.js";
 import { AuditStore } from "./chat/audit-store.js";
+import { AttachmentStore } from "./chat/attachment-store.js";
 import { runStartupMigration } from "./migrate.js";
 import { createPublicApp, createInternalApp, type InvokePayload, type ServerDeps } from "./server.js";
 
@@ -22,6 +23,7 @@ const conversations = new ConversationStore(config.dataDir);
 const personas = new PersonaStore(config.dataDir);
 const heartbeats = new HeartbeatStore(config.dataDir);
 const audit = new AuditStore(config.dataDir);
+const attachments = new AttachmentStore(config.dataDir);
 
 if (config.vapidPublicKey && config.vapidPrivateKey) {
   webpush.setVapidDetails(config.vapidSubject, config.vapidPublicKey, config.vapidPrivateKey);
@@ -63,6 +65,7 @@ const deps: ServerDeps = {
   personas,
   heartbeats,
   audit,
+  attachments,
   webPush: webpush,
   logger,
   invokeRunner,

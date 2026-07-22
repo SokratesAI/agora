@@ -15,6 +15,7 @@ import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
 import { HeartbeatStore } from "./chat/heartbeat-store.js";
 import { AuditStore } from "./chat/audit-store.js";
+import { AttachmentStore } from "./chat/attachment-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -55,6 +56,7 @@ async function makeDeps(configOverrides: Partial<Config> = {}): Promise<
     personas: new PersonaStore(dir),
     heartbeats: new HeartbeatStore(dir),
     audit: new AuditStore(dir),
+    attachments: new AttachmentStore(dir),
     webPush,
     logger: pino({ enabled: false }),
     invokeRunner: invokeMock,
@@ -138,6 +140,8 @@ describe("agora public app", () => {
       vaultRead: true,
       vaultWrite: false,
       codeExecution: false,
+      kubectlRead: false,
+      githubRead: false,
     });
   });
 
@@ -152,6 +156,17 @@ describe("agora public app", () => {
     expect(res.body.persona.capabilities.vaultWrite).toBe(true);
     expect(res.body.persona.capabilities.webSearch).toBe(true);
     expect(res.body.persona.sharedMemory).toBe("notes");
+  });
+
+  it("POST /personas accepts kubectlRead/githubRead capability flags", async () => {
+    const res = await request(app).post("/personas").send({
+      name: "Ops",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { kubectlRead: true, githubRead: true },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.persona.capabilities.kubectlRead).toBe(true);
+    expect(res.body.persona.capabilities.githubRead).toBe(true);
   });
 
   it("DELETE /personas/:id refuses while referenced by a conversation or heartbeat", async () => {
@@ -542,6 +557,104 @@ describe("agora public app", () => {
     const res = await request(app).get("/audit");
     expect(res.status).toBe(200);
     expect(res.body.entries[0]).toMatchObject({ capability: "vault_write" });
+  });
+
+  // ---- Attachments (Issues.md: "Sending files, images or voice does not
+  // work") -------------------------------------------------------------
+  describe("attachments", () => {
+    it("POST /attachments stores the file and returns its metadata", async () => {
+      const res = await request(app)
+        .post("/attachments")
+        .attach("file", Buffer.from("hello world"), { filename: "notes.txt", contentType: "text/plain" });
+      expect(res.status).toBe(201);
+      expect(res.body.attachment).toMatchObject({ filename: "notes.txt", mimeType: "text/plain", size: 11 });
+      expect(res.body.attachment.id).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it("POST /attachments 400s with no file", async () => {
+      const res = await request(app).post("/attachments").send({});
+      expect(res.status).toBe(400);
+    });
+
+    it("GET /attachments/:id serves the content with the right content-type", async () => {
+      const uploaded = await request(app)
+        .post("/attachments")
+        .attach("file", Buffer.from([1, 2, 3, 4]), { filename: "photo.png", contentType: "image/png" });
+      const id = uploaded.body.attachment.id;
+
+      const res = await request(app).get(`/attachments/${id}`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toBe("image/png");
+      expect(res.headers["content-disposition"]).toBe("inline");
+      expect(Buffer.compare(res.body, Buffer.from([1, 2, 3, 4]))).toBe(0);
+    });
+
+    it("GET /attachments/:id sets a download disposition for non-image files", async () => {
+      const uploaded = await request(app)
+        .post("/attachments")
+        .attach("file", Buffer.from("data"), { filename: "report.pdf", contentType: "application/pdf" });
+      const res = await request(app).get(`/attachments/${uploaded.body.attachment.id}`);
+      expect(res.headers["content-disposition"]).toContain("attachment");
+      expect(res.headers["content-disposition"]).toContain("report.pdf");
+    });
+
+    it("GET /attachments/:id 404s for an unknown id", async () => {
+      const res = await request(app).get("/attachments/does-not-exist");
+      expect(res.status).toBe(404);
+    });
+
+    it("reply with attachmentIds resolves them onto the stored message", async () => {
+      const uploaded = await request(app)
+        .post("/attachments")
+        .attach("file", Buffer.from("img"), { filename: "photo.jpg", contentType: "image/jpeg" });
+      const created = await request(app)
+        .post("/conversations")
+        .send({ name: "WithPhoto", model: "anthropic:claude-sonnet-5" });
+      const res = await request(app)
+        .post(`/conversations/${created.body.conversation.id}/reply`)
+        .send({ text: "check this out", attachmentIds: [uploaded.body.attachment.id] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message.attachments).toHaveLength(1);
+      expect(res.body.message.attachments[0]).toMatchObject({ filename: "photo.jpg", mimeType: "image/jpeg" });
+    });
+
+    it("reply with only an attachment and no text succeeds", async () => {
+      const uploaded = await request(app)
+        .post("/attachments")
+        .attach("file", Buffer.from("img"), { filename: "photo.jpg", contentType: "image/jpeg" });
+      const created = await request(app)
+        .post("/conversations")
+        .send({ name: "PhotoOnly", model: "anthropic:claude-sonnet-5" });
+      const res = await request(app)
+        .post(`/conversations/${created.body.conversation.id}/reply`)
+        .send({ attachmentIds: [uploaded.body.attachment.id] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message.text).toBe("");
+      expect(res.body.message.attachments).toHaveLength(1);
+    });
+
+    it("reply with neither text nor a resolvable attachment 400s", async () => {
+      const created = await request(app)
+        .post("/conversations")
+        .send({ name: "Empty", model: "anthropic:claude-sonnet-5" });
+      const res = await request(app)
+        .post(`/conversations/${created.body.conversation.id}/reply`)
+        .send({ attachmentIds: ["unknown-id"] });
+      expect(res.status).toBe(400);
+    });
+
+    it("reply silently drops unknown attachment ids instead of failing the whole reply", async () => {
+      const created = await request(app)
+        .post("/conversations")
+        .send({ name: "PartlyBroken", model: "anthropic:claude-sonnet-5" });
+      const res = await request(app)
+        .post(`/conversations/${created.body.conversation.id}/reply`)
+        .send({ text: "hi", attachmentIds: ["unknown-id"] });
+      expect(res.status).toBe(200);
+      expect(res.body.message.attachments ?? []).toHaveLength(0);
+    });
   });
 });
 

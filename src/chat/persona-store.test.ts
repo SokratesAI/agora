@@ -29,6 +29,11 @@ describe("PersonaStore", () => {
     expect(persona.capabilities.vaultRead).toBe(true);
     expect(persona.capabilities.vaultWrite).toBe(false);
     expect(persona.capabilities.codeExecution).toBe(false);
+    // Issues.md #3 — cluster/GitHub read tools default off, unlike
+    // webSearch/vaultRead. Powerful new capabilities shouldn't silently
+    // turn on for personas that predate them.
+    expect(persona.capabilities.kubectlRead).toBe(false);
+    expect(persona.capabilities.githubRead).toBe(false);
     expect(persona.sharedMemory).toBe("");
     expect(persona.isTemplate).toBe(false);
   });
@@ -46,6 +51,24 @@ describe("PersonaStore", () => {
     const updated = await store.update(persona.id, { capabilities: { webSearch: false } });
     expect(updated?.capabilities.webSearch).toBe(false);
     expect(updated?.capabilities.vaultWrite).toBe(true);
+  });
+
+  it("toggles kubectlRead/githubRead independently of other capabilities", async () => {
+    const store = await makeStore();
+    const persona = await store.create({
+      name: "Ops",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { kubectlRead: true, githubRead: true },
+    });
+    expect(persona.capabilities.kubectlRead).toBe(true);
+    expect(persona.capabilities.githubRead).toBe(true);
+    // Everything else stays at its own default, unaffected.
+    expect(persona.capabilities.webSearch).toBe(true);
+    expect(persona.capabilities.vaultWrite).toBe(false);
+
+    const updated = await store.update(persona.id, { capabilities: { kubectlRead: false } });
+    expect(updated?.capabilities.kubectlRead).toBe(false);
+    expect(updated?.capabilities.githubRead).toBe(true);
   });
 
   it("persists updates and bumps updatedAt", async () => {

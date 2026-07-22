@@ -1,4 +1,5 @@
 import express, { type Express, type RequestHandler } from "express";
+import multer from "multer";
 import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
@@ -13,6 +14,7 @@ import type { PersonaStore, PersonaCapabilities } from "./chat/persona-store.js"
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
 import { SCHEDULE_RE } from "./chat/heartbeat-store.js";
 import type { AuditStore } from "./chat/audit-store.js";
+import { MAX_ATTACHMENT_BYTES, type AttachmentStore } from "./chat/attachment-store.js";
 import { MODEL_CATALOG } from "./models.js";
 import {
   notificationsSent,
@@ -47,6 +49,7 @@ export interface ServerDeps {
   personas: PersonaStore;
   heartbeats: HeartbeatStore;
   audit: AuditStore;
+  attachments: AttachmentStore;
   webPush: WebPushSender;
   logger: pino.Logger;
   /** undefined → ask/preview return 503 (RUNNER_URL not configured). */
@@ -66,7 +69,14 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
   if (typeof body !== "object" || body === null) return undefined;
   const b = body as Record<string, unknown>;
   const out: Partial<PersonaCapabilities> = {};
-  for (const key of ["webSearch", "vaultRead", "vaultWrite", "codeExecution"] as const) {
+  for (const key of [
+    "webSearch",
+    "vaultRead",
+    "vaultWrite",
+    "codeExecution",
+    "kubectlRead",
+    "githubRead",
+  ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }
   return out;
@@ -300,8 +310,23 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
  * platform (agent-facing writes live on the internal app, ADR 0007).
  */
 export function createPublicApp(deps: ServerDeps): Express {
-  const { config, store, conversations, personas, heartbeats, audit, logger } = deps;
+  const { config, store, conversations, personas, heartbeats, audit, attachments, logger } = deps;
   const app = express();
+  // Memory storage — files are small (MAX_ATTACHMENT_BYTES caps it) and
+  // written straight through to AttachmentStore's own disk layout; no
+  // benefit to multer's own disk-staging step for this size.
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_ATTACHMENT_BYTES } });
+
+  /** Resolves attachmentIds → stored metadata, silently dropping anything
+   * unknown rather than 400ing the whole reply — an attachment that failed
+   * to upload shouldn't also block the text that was typed alongside it. */
+  async function resolveAttachments(ids: unknown): Promise<import("./chat/attachment-store.js").AttachmentMeta[]> {
+    if (!Array.isArray(ids)) return [];
+    const resolved = await Promise.all(
+      ids.filter((id): id is string => typeof id === "string").map((id) => attachments.getMeta(id)),
+    );
+    return resolved.filter((m): m is import("./chat/attachment-store.js").AttachmentMeta => m !== null);
+  }
   app.use(express.json());
   app.use(express.static("public"));
 
@@ -331,6 +356,47 @@ export function createPublicApp(deps: ServerDeps): Express {
     subscriptionsRegistered.add(1);
     logger.info({ endpoint: req.body.endpoint }, "subscription registered");
     res.status(201).json({ status: "subscribed" });
+  });
+
+  // ---- Attachments (Issues.md: "Sending files, images or voice does not
+  // work") — upload returns metadata only; the id is what a reply's
+  // attachmentIds references. Two-step (upload, then reply) rather than
+  // multipart-on-the-reply-itself so a failed/retried reply doesn't
+  // re-upload files that already made it to storage. --------------------
+  app.post("/attachments", upload.single("file"), async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: "file is required" });
+      return;
+    }
+    const attachment = await attachments.save(
+      req.file.originalname,
+      req.file.mimetype || "application/octet-stream",
+      req.file.buffer,
+    );
+    res.status(201).json({ attachment });
+  });
+
+  app.get("/attachments/:id", async (req, res) => {
+    const meta = await attachments.getMeta(req.params.id);
+    if (!meta) {
+      res.status(404).json({ error: "attachment not found" });
+      return;
+    }
+    const content = await attachments.getContent(req.params.id);
+    if (!content) {
+      res.status(404).json({ error: "attachment not found" });
+      return;
+    }
+    res.set("Content-Type", meta.mimeType);
+    // Images render inline in the chat bubble; everything else downloads
+    // instead of trying (and likely failing) to navigate the browser to it.
+    res.set(
+      "Content-Disposition",
+      meta.mimeType.startsWith("image/")
+        ? "inline"
+        : `attachment; filename="${encodeURIComponent(meta.filename)}"`,
+    );
+    res.status(200).send(content);
   });
 
   // ---- Legacy Main shims (ADR 0008) — kept for any old caller; the new
@@ -687,9 +753,17 @@ export function createPublicApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/reply", async (req, res) => {
-    const { text, model } = req.body as { text?: unknown; model?: unknown };
-    if (typeof text !== "string" || text.length === 0) {
-      res.status(400).json({ error: "text is required" });
+    const { text, model, attachmentIds } = req.body as {
+      text?: unknown;
+      model?: unknown;
+      attachmentIds?: unknown;
+    };
+    const resolvedAttachments = await resolveAttachments(attachmentIds);
+    // Text is required UNLESS at least one attachment resolved — an
+    // image/file sent with no caption is still a valid message (Issues.md:
+    // "Sending files, images... does not work").
+    if ((typeof text !== "string" || text.length === 0) && resolvedAttachments.length === 0) {
+      res.status(400).json({ error: "text or an attachment is required" });
       return;
     }
     if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
@@ -699,8 +773,9 @@ export function createPublicApp(deps: ServerDeps): Express {
     const message = await conversations.appendMessage(
       req.params.id,
       "Edvard",
-      text,
+      typeof text === "string" ? text : "",
       typeof model === "string" ? model : undefined,
+      resolvedAttachments,
     );
     if (!message) {
       res.status(404).json({ error: "conversation not found" });
