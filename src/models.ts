@@ -65,4 +65,41 @@ export const MODEL_CATALOG: ModelOption[] = [
     provider: "gemini",
     supportsThinking: true,
   },
+  // Pinned snapshots below, added 2026-07-22 alongside the "-latest" aliases
+  // above so free-tier users aren't limited to whatever "latest" currently
+  // resolves to. Each was live-tested for generateContent access under this
+  // project's API key before being added -- gemini-2.5-flash/-flash-lite were
+  // tried too and 404'd ("no longer available to new users", same failure
+  // mode noted above for a pinned 2.5 snapshot) so they're deliberately
+  // excluded. If any entry below starts 404ing the same way, pull it.
+  {
+    id: "gemini:gemini-3-flash-preview",
+    label: "Gemini 3 Flash (Preview)",
+    provider: "gemini",
+    supportsThinking: true,
+  },
+  {
+    id: "gemini:gemini-3.1-flash-lite",
+    label: "Gemini 3.1 Flash Lite",
+    provider: "gemini",
+    supportsThinking: true,
+  },
+  {
+    id: "gemini:gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    provider: "gemini",
+    supportsThinking: true,
+  },
+  {
+    id: "gemini:gemini-3.5-flash-lite",
+    label: "Gemini 3.5 Flash Lite",
+    provider: "gemini",
+    supportsThinking: true,
+  },
+  {
+    id: "gemini:gemini-3.6-flash",
+    label: "Gemini 3.6 Flash",
+    provider: "gemini",
+    supportsThinking: true,
+  },
 ];
