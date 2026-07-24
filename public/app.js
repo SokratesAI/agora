@@ -64,6 +64,7 @@ const editModel = $("edit-model");
 const editBadge = $("edit-badge");
 const editThinkingRow = $("edit-thinking-row");
 const editThinking = $("edit-thinking");
+const editStickyFallback = $("edit-sticky-fallback");
 const editMemory = $("edit-memory");
 const editParticipants = $("edit-participants");
 const editAddPersona = $("edit-add-persona");
@@ -621,6 +622,7 @@ sheetEdit.addEventListener("click", async () => {
   editPersonality.value = data.personality || "";
   editModel.value = data.model;
   editThinking.checked = Boolean(data.thinking);
+  editStickyFallback.checked = Boolean(data.stickyFallback);
   editMemory.value = data.memory || "";
   editLinks = (data.personas || []).map((p) => ({ ...p }));
   renderEditParticipants();
@@ -659,6 +661,7 @@ editModal.addEventListener("submit", async (event) => {
     personality: editPersonality.value,
     model: editModel.value,
     thinking: editThinkingRow.hidden ? false : editThinking.checked,
+    stickyFallback: editStickyFallback.checked,
     memory: editMemory.value,
     personas: editLinks.map(({ personaId, role }) => ({ personaId, role })),
   });

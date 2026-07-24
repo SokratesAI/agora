@@ -54,6 +54,17 @@ export interface Conversation {
   /** paused = the runner never replies here (also the auto-set state when
    * the AI-AI turn cap trips — Architecture §3). */
   status: "active" | "paused";
+  /** Gemini rate-limit fallback mode (Agora Issues.md #2, made
+   * per-conversation 2026-07-24). false (default): a fallback model's
+   * answer is used for that one reply only — the conversation reverts to
+   * trying its configured model again next turn ("regular" cascading).
+   * true: once a fallback model answers, the runner PATCHes `model` onto
+   * this conversation/persona so it STAYS on that model going forward
+   * ("sticky") until changed back manually. Heartbeats always run
+   * non-sticky regardless of this field (persona-runner enforces that,
+   * not this store) — a scheduled proactive message shouldn't
+   * permanently downgrade a persona other conversations also use. */
+  stickyFallback: boolean;
   /** Per-conversation scratchpad, injected into the system prompt. */
   memory: string;
   /** Agent/search-only metadata — no human-facing editor (Decisions/0004). */
@@ -86,6 +97,7 @@ export interface ConversationUpdate {
   memory?: string;
   tags?: string[];
   rootId?: string;
+  stickyFallback?: boolean;
 }
 
 export interface SearchResult {
@@ -99,6 +111,7 @@ export interface SearchResult {
 export const DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001";
 export const DEFAULT_THINKING = false;
 export const DEFAULT_ARCHIVED = false;
+export const DEFAULT_STICKY_FALLBACK = false;
 
 /**
  * One file per conversation under a dedicated subdirectory, same atomic-write
@@ -201,6 +214,7 @@ export class ConversationStore {
       memory: "",
       tags: [],
       archived: DEFAULT_ARCHIVED,
+      stickyFallback: DEFAULT_STICKY_FALLBACK,
       rootId: id,
       createdAt: new Date().toISOString(),
       messages: [],
@@ -249,6 +263,7 @@ export class ConversationStore {
       memory: source.memory,
       tags: [...source.tags],
       archived: false,
+      stickyFallback: source.stickyFallback,
       rootId: source.rootId,
       forkedFrom: {
         conversationId: source.id,
@@ -417,6 +432,7 @@ export class ConversationStore {
       conversation.status ??= "active";
       conversation.memory ??= "";
       conversation.tags ??= [];
+      conversation.stickyFallback ??= DEFAULT_STICKY_FALLBACK;
       conversation.rootId ??= conversation.id;
       // Deliberately NOT backfilling `personas` — its absence is how the
       // startup migration recognizes an unmigrated record (critique #7:

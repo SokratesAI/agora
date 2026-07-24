@@ -327,6 +327,24 @@ describe("agora public app", () => {
     expect(persona?.model).toBe("gemini:gemini-flash-latest");
   });
 
+  it("PATCH /conversations/:id updates stickyFallback, defaults false, and returns it on GET", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Sticky", model: "gemini:gemini-flash-latest" });
+    const id = created.body.conversation.id;
+    expect(created.body.conversation.stickyFallback).toBe(false);
+
+    const res = await request(app)
+      .patch(`/conversations/${id}`)
+      .send({ stickyFallback: true });
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.stickyFallback).toBe(true);
+
+    const list = await request(app).get("/conversations");
+    const found = list.body.conversations.find((c: { id: string }) => c.id === id);
+    expect(found.stickyFallback).toBe(true);
+  });
+
   it("PATCH /conversations/:id validates persona link sets", async () => {
     const created = await request(app)
       .post("/conversations")
