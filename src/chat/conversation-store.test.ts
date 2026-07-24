@@ -210,6 +210,19 @@ describe("ConversationStore", () => {
     expect(message?.modelOverride).toBe("anthropic:claude-opus-4-8");
   });
 
+  it("stores system:true on appendMessage, and omits it entirely when not passed", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Test", "persona a");
+    const systemMsg = await store.appendMessage(
+      conversation.id, "Agora", "paused", undefined, undefined, true,
+    );
+    expect(systemMsg?.system).toBe(true);
+
+    const normalMsg = await store.appendMessage(conversation.id, "Edvard", "hi");
+    expect(normalMsg?.system).toBeUndefined();
+  });
+
   it("deletes a message from a conversation", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);

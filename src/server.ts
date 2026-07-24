@@ -142,7 +142,7 @@ function toInvokeMessages(
 ): InvokePayload["messages"] {
   const result: InvokePayload["messages"] = [];
   for (const message of conversation.messages.slice(-30)) {
-    if (message.forgotten) continue;
+    if (message.forgotten || message.system) continue;
     const role = message.sender === "Edvard" ? "user" : "assistant";
     const content =
       role === "assistant" && (conversation.personas?.length ?? 0) > 1
@@ -975,7 +975,7 @@ export function createInternalApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/notify", async (req, res) => {
-    const { text, sender } = req.body as { text?: unknown; sender?: unknown };
+    const { text, sender, system } = req.body as { text?: unknown; sender?: unknown; system?: unknown };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
       return;
@@ -990,7 +990,9 @@ export function createInternalApp(deps: ServerDeps): Express {
     // conversation name, exactly the old behavior.
     const speaker =
       typeof sender === "string" && sender.length > 0 ? sender : conversation.name;
-    const message = await conversations.appendMessage(conversation.id, speaker, text);
+    const message = await conversations.appendMessage(
+      conversation.id, speaker, text, undefined, undefined, system === true,
+    );
 
     const subscription = await store.load();
     if (!subscription) {
