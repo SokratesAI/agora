@@ -128,6 +128,7 @@ async function enrichConversation(
     memory: conversation.memory,
     tags: conversation.tags,
     archived: conversation.archived,
+    stickyFallback: conversation.stickyFallback,
     rootId: conversation.rootId,
     forkedFrom: conversation.forkedFrom,
     createdAt: conversation.createdAt,
@@ -264,6 +265,7 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
     if (typeof body.archived === "boolean") updates.archived = body.archived;
     if (body.status === "active" || body.status === "paused") updates.status = body.status;
     if (typeof body.memory === "string") updates.memory = body.memory;
+    if (typeof body.stickyFallback === "boolean") updates.stickyFallback = body.stickyFallback;
     if (Array.isArray(body.tags) && body.tags.every((t) => typeof t === "string")) {
       updates.tags = body.tags as string[];
     }

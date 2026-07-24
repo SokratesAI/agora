@@ -570,6 +570,11 @@
         <input type="checkbox" id="edit-thinking" />
         Thinking
       </label>
+      <label class="checkbox-row" id="edit-sticky-fallback-row">
+        <input type="checkbox" id="edit-sticky-fallback" />
+        Sticky Gemini fallback
+      </label>
+      <p class="modal-hint" id="edit-sticky-fallback-hint">Off (default): a rate-limited Gemini model falls back for one reply only, then tries its configured model again next turn. On: once a fallback model answers, this conversation stays on it until you change it back. Heartbeats always use regular (non-sticky) fallback regardless of this setting.</p>
       <h3>Conversation memory (this thread only)</h3>
       <textarea id="edit-memory" placeholder="Notes the personas always see in this conversation..." rows="2"></textarea>
       <h3>Participants</h3>

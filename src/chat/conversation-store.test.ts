@@ -7,6 +7,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_THINKING,
   DEFAULT_ARCHIVED,
+  DEFAULT_STICKY_FALLBACK,
 } from "./conversation-store.js";
 
 describe("ConversationStore", () => {
@@ -152,6 +153,35 @@ describe("ConversationStore", () => {
     await fs.writeFile(filePath, JSON.stringify(withoutArchived));
     const reloaded = await store.get(conversation.id);
     expect(reloaded?.archived).toBe(DEFAULT_ARCHIVED);
+  });
+
+  it("defaults stickyFallback to false and can update it", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    expect(conversation.stickyFallback).toBe(DEFAULT_STICKY_FALLBACK);
+    const updated = await store.update(conversation.id, { stickyFallback: true });
+    expect(updated?.stickyFallback).toBe(true);
+  });
+
+  it("backfills stickyFallback when reading a pre-existing file that lacks it", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    const filePath = path.join(dir, "conversations", `${conversation.id}.json`);
+    const { stickyFallback: _stickyFallback, ...withoutSticky } = conversation;
+    await fs.writeFile(filePath, JSON.stringify(withoutSticky));
+    const reloaded = await store.get(conversation.id);
+    expect(reloaded?.stickyFallback).toBe(DEFAULT_STICKY_FALLBACK);
+  });
+
+  it("carries stickyFallback over when forking a conversation", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "persona a");
+    await store.update(conversation.id, { stickyFallback: true });
+    const forked = await store.fork(conversation.id);
+    expect(forked?.stickyFallback).toBe(true);
   });
 
   it("lists conversations sorted by most recent message activity, undated ones last", async () => {
