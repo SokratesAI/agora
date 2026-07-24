@@ -456,6 +456,23 @@ describe("agora public app", () => {
     expect(contents).toContain("public");
   });
 
+  it("ask excludes system (control-plane) messages from the context it sends", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "SystemMsgTest", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    await request(app).post(`/conversations/${id}/reply`).send({ text: "a real question" });
+    await request(app)
+      .post(`/conversations/${id}/notify`)
+      .send({ text: "paused notice", sender: "Agora", system: true });
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    const contents = payload.messages.map((m) => m.content);
+    expect(contents).not.toContain("paused notice");
+    expect(contents).toContain("a real question");
+  });
+
   it("POST .../forget toggles and 404s on unknown ids", async () => {
     const created = await request(app)
       .post("/conversations")
@@ -781,6 +798,20 @@ describe("agora internal app", () => {
       .post(`/conversations/${conversation.id}/notify`)
       .send({ text: "hi" });
     expect(res.body.message.sender).toBe("Haiku");
+  });
+
+  it("POST /conversations/:id/notify records system:true when passed, omits it otherwise", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Test", "");
+    const paused = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "paused", sender: "Agora", system: true });
+    expect(paused.body.message.system).toBe(true);
+
+    const normal = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "a real reply", sender: "Haiku" });
+    expect(normal.body.message.system).toBeUndefined();
   });
 
   it("legacy POST /notify lands in the Main conversation with a push (ADR 0008)", async () => {

@@ -28,6 +28,17 @@ export interface Message {
   /** Files/images sent with this message — undefined/empty for the
    * overwhelming majority of messages, which carry no attachment. */
   attachments?: MessageAttachment[];
+  /** A runner-generated control-plane notice (e.g. the auto-pause
+   * message), not real conversation content -- excluded from every LLM
+   * context the runner builds, same as `forgotten`, but still rendered
+   * normally in the UI (Edvard should see it; the model shouldn't).
+   * 2026-07-24: found live that without this, a persona asked "what's
+   * this?" about an unrelated image answered about the PRECEDING
+   * auto-pause notice instead, having read it as if it were a real
+   * previous reply. Sender-name matching ("Agora") can't distinguish
+   * this from a real persona literally named Agora (migrate.ts creates
+   * exactly one, for the legacy Main thread) -- needs its own flag. */
+  system?: boolean;
 }
 
 /** Exactly one "curator" per conversation; listeners reply only when
@@ -320,6 +331,7 @@ export class ConversationStore {
     text: string,
     modelOverride?: string,
     attachments?: MessageAttachment[],
+    system?: boolean,
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -328,6 +340,7 @@ export class ConversationStore {
       ts: new Date().toISOString(),
       ...(modelOverride ? { modelOverride } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(system ? { system: true } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);
