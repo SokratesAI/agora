@@ -3,6 +3,21 @@
 // interval, and focus/open the app on click. No caching/offline strategy —
 // that's not what this PoC scope is proving.
 
+// 2026-07-24 (Issues.md: "notifications still show when app is open" --
+// reported AFTER the visibilityState check below was already shipped).
+// Root cause wasn't the check itself, it was that a NEW service worker
+// version never actually took over: without skipWaiting/clients.claim, the
+// browser's default lifecycle leaves a new SW "waiting" until every
+// existing client closes -- which a home-screen PWA that's just
+// backgrounded, not force-closed, may never do. So every fix shipped to
+// this file could sit inert indefinitely on an already-installed phone.
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("push", (event) => {
   let data = { title: "Agora", body: "" };
   try {
