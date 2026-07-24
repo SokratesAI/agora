@@ -773,6 +773,33 @@ describe("agora internal app", () => {
     expect((await deps.audit.list())[0].capability).toBe("heartbeat");
   });
 
+  it("POST /audit stores before/after content for a vault_write, for the Activity diff view", async () => {
+    const res = await request(app).post("/audit").send({
+      personaName: "Gemini",
+      conversationId: "c1",
+      capability: "vault_write",
+      detail: "projects/agora/issues.md",
+      before: "old content",
+      after: "new content",
+    });
+    expect(res.status).toBe(201);
+    const stored = (await deps.audit.list())[0];
+    expect(stored.before).toBe("old content");
+    expect(stored.after).toBe("new content");
+  });
+
+  it("POST /audit omits before/after when not provided (e.g. a vault_read)", async () => {
+    await request(app).post("/audit").send({
+      personaName: "Gemini",
+      conversationId: "c1",
+      capability: "vault_read",
+      detail: "projects/agora/issues.md",
+    });
+    const stored = (await deps.audit.list())[0];
+    expect(stored.before).toBeUndefined();
+    expect(stored.after).toBeUndefined();
+  });
+
   it("POST /conversations/:id/notify honors an explicit sender for multi-persona turns", async () => {
     await deps.store.save(validSubscription);
     const conversation = await deps.conversations.create("Multi", "");

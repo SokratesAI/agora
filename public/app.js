@@ -147,6 +147,11 @@ const heartbeatFormCancel = $("heartbeat-form-cancel");
 const auditScrim = $("audit-scrim");
 const auditList = $("audit-list");
 const auditClose = $("audit-close");
+const auditDetailScrim = $("audit-detail-scrim");
+const auditDetailTitle = $("audit-detail-title");
+const auditDetailFields = $("audit-detail-fields");
+const auditDetailDiff = $("audit-detail-diff");
+const auditDetailClose = $("audit-detail-close");
 
 const pausedBanner = $("paused-banner");
 const pausedResume = $("paused-resume");
@@ -1166,6 +1171,103 @@ heartbeatForm.addEventListener("submit", async (event) => {
 });
 
 // --- Activity (audit) --------------------------------------------------------
+
+// Line-based LCS diff, same idea as `diff`/git — walks the longest common
+// subsequence table backwards to emit a run of unchanged/added/removed
+// lines. O(n*m) on line counts, which is fine for the vault notes this
+// diffs (capped at CONTENT_CHARS_MAX server-side); above LCS_LINE_BUDGET
+// cells we skip straight to a whole-file replace instead of hanging the
+// tab on some outlier huge file.
+const LCS_LINE_BUDGET = 250000;
+function diffLines(before, after) {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  if (a.length * b.length > LCS_LINE_BUDGET) {
+    return [
+      ...a.map((line) => ({ type: "del", line })),
+      ...b.map((line) => ({ type: "add", line })),
+    ];
+  }
+  const n = a.length;
+  const m = b.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      out.push({ type: "ctx", line: a[i] });
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      out.push({ type: "del", line: a[i] });
+      i++;
+    } else {
+      out.push({ type: "add", line: b[j] });
+      j++;
+    }
+  }
+  while (i < n) out.push({ type: "del", line: a[i++] });
+  while (j < m) out.push({ type: "add", line: b[j++] });
+  return out;
+}
+
+function renderDiff(before, after) {
+  const container = document.createElement("div");
+  if (before === after) {
+    container.className = "diff-empty";
+    container.textContent = "No content change.";
+    return container;
+  }
+  container.className = "diff-view";
+  for (const { type, line } of diffLines(before, after)) {
+    const row = document.createElement("div");
+    row.className = `diff-line diff-${type}`;
+    const marker = document.createElement("span");
+    marker.className = "diff-marker";
+    marker.textContent = type === "add" ? "+" : type === "del" ? "-" : " ";
+    const text = document.createElement("span");
+    text.textContent = line;
+    row.append(marker, text);
+    container.appendChild(row);
+  }
+  return container;
+}
+
+function openAuditDetail(entry) {
+  auditDetailTitle.textContent = `${entry.personaName} · ${entry.capability}`;
+  auditDetailFields.innerHTML = "";
+  const fields = [
+    ["Persona", entry.personaName],
+    ["Capability", entry.capability],
+    ["Target", entry.detail || "—"],
+    ["Time", new Date(entry.ts).toLocaleString()],
+    ["Conversation", entry.conversationId || "—"],
+  ];
+  for (const [label, value] of fields) {
+    const row = document.createElement("div");
+    row.className = "field-row";
+    const labelEl = document.createElement("span");
+    labelEl.className = "field-label";
+    labelEl.textContent = label;
+    const valueEl = document.createElement("span");
+    valueEl.className = "field-value";
+    valueEl.textContent = value;
+    row.append(labelEl, valueEl);
+    auditDetailFields.appendChild(row);
+  }
+  auditDetailDiff.innerHTML = "";
+  if (entry.before !== undefined && entry.after !== undefined) {
+    auditDetailDiff.appendChild(renderDiff(entry.before, entry.after));
+  }
+  auditDetailScrim.hidden = false;
+}
+
 navAudit.addEventListener("click", async () => {
   closeDrawer();
   const { ok, data } = await api("GET", "/audit?limit=100");
@@ -1190,6 +1292,7 @@ navAudit.addEventListener("click", async () => {
       meta.textContent = `${new Date(entry.ts).toLocaleString()} — ${entry.detail}`;
       main.append(name, meta);
       row.appendChild(main);
+      row.addEventListener("click", () => openAuditDetail(entry));
       auditList.appendChild(row);
     }
   }
@@ -1200,6 +1303,12 @@ auditClose.addEventListener("click", () => {
 });
 auditScrim.addEventListener("click", (e) => {
   if (e.target === auditScrim) auditScrim.hidden = true;
+});
+auditDetailClose.addEventListener("click", () => {
+  auditDetailScrim.hidden = true;
+});
+auditDetailScrim.addEventListener("click", (e) => {
+  if (e.target === auditDetailScrim) auditDetailScrim.hidden = true;
 });
 
 // --- Messages ----------------------------------------------------------------

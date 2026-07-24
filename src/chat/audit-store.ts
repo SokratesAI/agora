@@ -12,12 +12,23 @@ export interface AuditEntry {
   conversationId: string | null;
   capability: string;
   detail: string;
+  /** Full file content before/after a vault_write, for the Activity diff
+   * view. Undefined for every other capability. Capped by the caller
+   * (CONTENT_CHARS_MAX below), not here — this store just persists what
+   * it's given. */
+  before?: string;
+  after?: string;
 }
 
 // Single JSON array capped to the newest MAX_ENTRIES — bounded by design,
 // this is an operational trail, not the durable archive (that's
 // Decisions/0003's backup once built).
 const MAX_ENTRIES = 500;
+
+// before/after content is the one field here that can be arbitrarily large
+// (a whole vault file) — cap it independently of MAX_ENTRIES so one big
+// note can't dominate the 500-entry budget's on-disk size.
+export const CONTENT_CHARS_MAX = 20_000;
 
 export class AuditStore {
   private readonly filePath: string;
@@ -34,6 +45,8 @@ export class AuditStore {
 
   async append(entry: Omit<AuditEntry, "ts">): Promise<AuditEntry> {
     const full: AuditEntry = { ts: new Date().toISOString(), ...entry };
+    if (full.before !== undefined) full.before = full.before.slice(0, CONTENT_CHARS_MAX);
+    if (full.after !== undefined) full.after = full.after.slice(0, CONTENT_CHARS_MAX);
     const write = this.writeQueue.then(async () => {
       const entries = await this.readAll();
       entries.push(full);
