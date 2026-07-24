@@ -1405,7 +1405,78 @@ function renderMessages(messages) {
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+const ACTIVITY_CHIP_LABELS = {
+  vault_read: "Read vault file",
+  vault_write: "Wrote vault file",
+  vault_list: "Listed vault folder",
+  web_search: "Searched the web",
+  kubectl_read: "Read cluster state",
+  github_read: "Read GitHub",
+  save_memory: "Saved memory",
+  heartbeat: "Ran heartbeat",
+};
+
+function activityEntryFromMessage(message) {
+  return {
+    personaName: message.sender,
+    capability: message.activity.capability,
+    detail: message.activity.detail,
+    ts: message.ts,
+    conversationId: currentConversationId,
+    before: message.activity.before,
+    after: message.activity.after,
+  };
+}
+
+function renderActivityChip(message) {
+  const { activity } = message;
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "msg-activity-chip";
+
+  const label = document.createElement("span");
+  label.className = "msg-activity-label";
+  const verb = ACTIVITY_CHIP_LABELS[activity.capability] || activity.capability;
+  label.textContent = activity.detail ? `${verb} · ${activity.detail}` : verb;
+  chip.appendChild(label);
+
+  if (activity.before !== undefined && activity.after !== undefined) {
+    let added = 0;
+    let removed = 0;
+    for (const { type } of diffLines(activity.before, activity.after)) {
+      if (type === "add") added++;
+      else if (type === "del") removed++;
+    }
+    const stats = document.createElement("span");
+    stats.className = "msg-activity-stats";
+    const addEl = document.createElement("span");
+    addEl.className = "stat-add";
+    addEl.textContent = `+${added}`;
+    const delEl = document.createElement("span");
+    delEl.className = "stat-del";
+    delEl.textContent = `-${removed}`;
+    stats.append(addEl, delEl);
+    chip.appendChild(stats);
+  }
+
+  const chevron = document.createElement("span");
+  chevron.className = "msg-activity-chevron";
+  chevron.textContent = "›";
+  chip.appendChild(chevron);
+
+  chip.addEventListener("click", () => openAuditDetail(activityEntryFromMessage(message)));
+  return chip;
+}
+
 function renderMessageBlock(message, isLast) {
+  // Inline Activity chip (2026-07-24) -- a tool-use event, not something
+  // anyone "said". No sender/timestamp meta line, no bubble, no long-press
+  // menu: just the same clickable-row-opens-detail affordance as the
+  // Activity tab, reusing its diff modal via activityEntryFromMessage.
+  if (message.activity) {
+    return renderActivityChip(message);
+  }
+
   const mine = message.sender === MY_SENDER;
   const block = document.createElement("div");
   block.className = `msg-block ${mine ? "mine" : "theirs"}`;

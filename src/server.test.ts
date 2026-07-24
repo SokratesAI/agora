@@ -473,6 +473,24 @@ describe("agora public app", () => {
     expect(contents).toContain("a real question");
   });
 
+  it("ask excludes inline activity messages from the context it sends (agents don't see their own tool-use chips)", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "ActivityMsgTest", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    await request(app).post(`/conversations/${id}/reply`).send({ text: "a real question" });
+    await deps.conversations.appendMessage(
+      id, "Gemini", "vault_read: notes.md", undefined, undefined, false,
+      { capability: "vault_read", detail: "notes.md" },
+    );
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    const contents = payload.messages.map((m) => m.content);
+    expect(contents).not.toContain("vault_read: notes.md");
+    expect(contents).toContain("a real question");
+  });
+
   it("POST .../forget toggles and 404s on unknown ids", async () => {
     const created = await request(app)
       .post("/conversations")
@@ -800,6 +818,36 @@ describe("agora internal app", () => {
     expect(stored.after).toBeUndefined();
   });
 
+  it("POST /audit appends an inline activity message into the conversation (in-chat Activity, 2026-07-24)", async () => {
+    const conversation = await deps.conversations.create("Live", "");
+    const res = await request(app).post("/audit").send({
+      personaName: "Gemini",
+      conversationId: conversation.id,
+      capability: "vault_write",
+      detail: "notes.md",
+      before: "old",
+      after: "new",
+    });
+    expect(res.status).toBe(201);
+    const reloaded = await deps.conversations.get(conversation.id);
+    expect(reloaded?.messages).toHaveLength(1);
+    expect(reloaded?.messages[0]).toMatchObject({
+      sender: "Gemini",
+      activity: { capability: "vault_write", detail: "notes.md", before: "old", after: "new" },
+    });
+  });
+
+  it("POST /audit without a resolvable conversationId records the entry but touches no conversation", async () => {
+    const res = await request(app).post("/audit").send({
+      personaName: "Gemini",
+      conversationId: "no-such-conversation",
+      capability: "vault_read",
+      detail: "notes.md",
+    });
+    expect(res.status).toBe(201);
+    expect(await deps.conversations.get("no-such-conversation")).toBeNull();
+  });
+
   it("POST /conversations/:id/notify honors an explicit sender for multi-persona turns", async () => {
     await deps.store.save(validSubscription);
     const conversation = await deps.conversations.create("Multi", "");
@@ -856,5 +904,34 @@ describe("agora internal app", () => {
       .send({ text: "recorded anyway" });
     expect(res.status).toBe(404);
     expect((await deps.conversations.get(conversation.id))?.messages).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 2026-07-24: live streaming -- a turn now lands as several small
+  // messages (one per text block, as it's generated) instead of one at the
+  // end. push=false lets the runner post every chunk but the last without
+  // spamming a phone notification per sentence.
+  // -------------------------------------------------------------------------
+
+  it("POST /conversations/:id/notify with push:false records the message but skips the push", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Stream", "");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "first chunk", sender: "Gemini", push: false });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("recorded");
+    expect(res.body.message.text).toBe("first chunk");
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("POST /conversations/:id/notify defaults push to true when omitted", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("StreamFinal", "");
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "final chunk", sender: "Gemini" });
+    expect(res.status).toBe(200);
+    expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
   });
 });

@@ -142,7 +142,7 @@ function toInvokeMessages(
 ): InvokePayload["messages"] {
   const result: InvokePayload["messages"] = [];
   for (const message of conversation.messages.slice(-30)) {
-    if (message.forgotten || message.system) continue;
+    if (message.forgotten || message.system || message.activity) continue;
     const role = message.sender === "Edvard" ? "user" : "assistant";
     const content =
       role === "assistant" && (conversation.personas?.length ?? 0) > 1
@@ -973,11 +973,30 @@ export function createInternalApp(deps: ServerDeps): Express {
       before: typeof body.before === "string" ? body.before : undefined,
       after: typeof body.after === "string" ? body.after : undefined,
     });
+    // Inline in-chat activity (2026-07-24): every capability call also
+    // shows up right where it happened in the conversation, not just in
+    // the standalone Activity tab -- one write path (the runner's existing
+    // audit() call) feeds both. appendMessage no-ops (returns null) on an
+    // unknown/missing conversationId, same graceful-degrade posture as
+    // every other conversationId-scoped call here.
+    if (entry.conversationId) {
+      await conversations.appendMessage(
+        entry.conversationId,
+        entry.personaName,
+        `${entry.capability}: ${entry.detail}`,
+        undefined,
+        undefined,
+        false,
+        { capability: entry.capability, detail: entry.detail, before: entry.before, after: entry.after },
+      );
+    }
     res.status(201).json({ status: "recorded", entry });
   });
 
   app.post("/conversations/:id/notify", async (req, res) => {
-    const { text, sender, system } = req.body as { text?: unknown; sender?: unknown; system?: unknown };
+    const { text, sender, system, push } = req.body as {
+      text?: unknown; sender?: unknown; system?: unknown; push?: unknown;
+    };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
       return;
@@ -995,6 +1014,17 @@ export function createInternalApp(deps: ServerDeps): Express {
     const message = await conversations.appendMessage(
       conversation.id, speaker, text, undefined, undefined, system === true,
     );
+
+    // Live streaming (2026-07-24): a single persona turn now lands as
+    // several small messages (one per text block, as it's generated)
+    // instead of one at the end -- push=false skips the phone notification
+    // for every chunk but the last so streaming a turn doesn't spam a
+    // notification per sentence. Defaults true so every other caller
+    // (heartbeats' one-shot notify, auto_pause, legacy /notify) is unchanged.
+    if (push === false) {
+      res.status(200).json({ status: "recorded", message });
+      return;
+    }
 
     const subscription = await store.load();
     if (!subscription) {

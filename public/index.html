@@ -361,6 +361,24 @@
     .msg-plain code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .msg-plain :not(pre) > code { background: var(--bg-input); padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
     .msg-plain a { color: var(--accent); text-decoration: underline; }
+    /* Inline Activity chip -- a persona's tool-use, shown right where it
+       happened in the conversation (2026-07-24), not just in the Activity
+       tab. Deliberately NOT a .msg-bubble/.msg-plain: no sender/timestamp
+       meta line, full-width, same clickable-row affordance as the Activity
+       tab's .studio-item. */
+    .msg-activity-chip {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      background: var(--bg-input); border: 1px solid var(--border); border-radius: 0.7rem;
+      padding: 0.45rem 0.7rem; font: inherit; font-size: 0.8rem; color: var(--text-dim);
+      cursor: pointer; text-align: left;
+    }
+    .msg-activity-chip:hover { background: var(--bg-raised); }
+    .msg-activity-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msg-activity-stats { flex: none; display: flex; gap: 0.35rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .msg-activity-stats .stat-add { color: var(--diff-add-text); }
+    .msg-activity-stats .stat-del { color: var(--diff-del-text); }
+    .msg-activity-chevron { flex: none; color: var(--text-dimmer); }
+
     .msg-attachments { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
     .msg-attachment-image { max-width: 100%; max-height: 16rem; border-radius: 0.7rem; display: block; }
     .msg-attachment-file {
