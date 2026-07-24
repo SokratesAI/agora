@@ -213,24 +213,48 @@ function escapeHtml(text) {
 const CODE_BLOCK_PLACEHOLDER = (i) => `\0CODEBLOCK${i}\0`;
 const CODE_BLOCK_PLACEHOLDER_RE = /\0CODEBLOCK(\d+)\0/g;
 
-function renderMarkdown(text) {
-  const escaped = escapeHtml(text);
-  const codeBlocks = [];
-  let withPlaceholders = escaped.replace(/```([\s\S]*?)```/g, (_m, code) => {
-    codeBlocks.push(`<pre><code>${code}</code></pre>`);
-    return CODE_BLOCK_PLACEHOLDER(codeBlocks.length - 1);
-  });
-  withPlaceholders = withPlaceholders
+function renderInline(text) {
+  return text
     .replace(/`([^`\n]+?)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "<em>$1</em>")
     .replace(/\[([^\]\n]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+// LLM replies routinely use headers and lists (we produce exactly this
+// style ourselves -- "1. ... 2. ..." / "- ... - ..." summaries) -- the old
+// renderer had no block-level structure at all beyond paragraphs, so these
+// rendered as raw literal "#"/"-"/"1." text (Issues.md: "does not display
+// markdown correctly").
+function renderBlock(block) {
+  const lines = block.split("\n");
+  const headerMatch = lines.length === 1 && lines[0].match(/^(#{1,6})\s+(.*)$/);
+  if (headerMatch) {
+    const level = headerMatch[1].length;
+    return `<h${level}>${renderInline(headerMatch[2])}</h${level}>`;
+  }
+  const nonEmpty = lines.filter((l) => l.trim());
+  if (nonEmpty.length > 0 && nonEmpty.every((l) => /^[-*+]\s+/.test(l.trim()))) {
+    const items = nonEmpty.map((l) => `<li>${renderInline(l.trim().replace(/^[-*+]\s+/, ""))}</li>`).join("");
+    return `<ul>${items}</ul>`;
+  }
+  if (nonEmpty.length > 0 && nonEmpty.every((l) => /^\d+\.\s+/.test(l.trim()))) {
+    const items = nonEmpty.map((l) => `<li>${renderInline(l.trim().replace(/^\d+\.\s+/, ""))}</li>`).join("");
+    return `<ol>${items}</ol>`;
+  }
+  return `<p>${renderInline(block).replace(/\n/g, "<br>")}</p>`;
+}
+
+function renderMarkdown(text) {
+  const escaped = escapeHtml(text);
+  const codeBlocks = [];
+  const withPlaceholders = escaped.replace(/```([\s\S]*?)```/g, (_m, code) => {
+    codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    return CODE_BLOCK_PLACEHOLDER(codeBlocks.length - 1);
+  });
   // Code blocks restored LAST so their real newlines survive the <br> pass.
-  const paragraphs = withPlaceholders
-    .split(/\n{2,}/)
-    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-    .join("");
-  return paragraphs.replace(CODE_BLOCK_PLACEHOLDER_RE, (_m, i) => codeBlocks[Number(i)]) || "<p></p>";
+  const blocks = withPlaceholders.split(/\n{2,}/).map(renderBlock).join("");
+  return blocks.replace(CODE_BLOCK_PLACEHOLDER_RE, (_m, i) => codeBlocks[Number(i)]) || "<p></p>";
 }
 
 function setStatus(text, ms = 2500) {
