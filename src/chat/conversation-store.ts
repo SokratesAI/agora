@@ -39,6 +39,22 @@ export interface Message {
    * this from a real persona literally named Agora (migrate.ts creates
    * exactly one, for the legacy Main thread) -- needs its own flag. */
   system?: boolean;
+  /** Inline capability-use indicator (Activity feed made inline in-chat,
+   * 2026-07-24) -- posted the moment a persona's tool call completes, same
+   * shape as AuditEntry minus ts/personaName (those are just `ts`/`sender`
+   * on the Message itself). Excluded from every LLM context AND from
+   * turn-taking (decide_turn/consecutive_ai_turns), same as `system`, but
+   * for a stronger reason: it isn't conversation content at all, just a UI
+   * event marker -- a persona must never see its own or another's tool use
+   * reported back as if it were something someone *said*. Rendered as a
+   * clickable chip, not a text bubble; before/after (vault_write only)
+   * feed the same diff view as the standalone Activity tab. */
+  activity?: {
+    capability: string;
+    detail: string;
+    before?: string;
+    after?: string;
+  };
 }
 
 /** Exactly one "curator" per conversation; listeners reply only when
@@ -332,6 +348,7 @@ export class ConversationStore {
     modelOverride?: string,
     attachments?: MessageAttachment[],
     system?: boolean,
+    activity?: Message["activity"],
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -341,6 +358,7 @@ export class ConversationStore {
       ...(modelOverride ? { modelOverride } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(system ? { system: true } : {}),
+      ...(activity ? { activity } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);
