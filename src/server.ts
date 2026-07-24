@@ -970,6 +970,8 @@ export function createInternalApp(deps: ServerDeps): Express {
       conversationId: typeof body.conversationId === "string" ? body.conversationId : null,
       capability: body.capability,
       detail: typeof body.detail === "string" ? body.detail : "",
+      before: typeof body.before === "string" ? body.before : undefined,
+      after: typeof body.after === "string" ? body.after : undefined,
     });
     res.status(201).json({ status: "recorded", entry });
   });

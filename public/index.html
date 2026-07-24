@@ -24,6 +24,10 @@
       --bubble-mine: #2c2d2f;
       --danger: #f87171;
       --overlay: rgba(0,0,0,0.55);
+      --diff-add-bg: rgba(46, 160, 67, 0.2);
+      --diff-add-text: #7ee787;
+      --diff-del-bg: rgba(248, 81, 73, 0.2);
+      --diff-del-text: #ffa198;
     }
     :root[data-theme="light"] {
       color-scheme: light;
@@ -38,6 +42,10 @@
       --bubble-mine: #f0f0f1;
       --danger: #dc2626;
       --overlay: rgba(0,0,0,0.3);
+      --diff-add-bg: #d9f3df;
+      --diff-add-text: #1a7f37;
+      --diff-del-bg: #ffe4e2;
+      --diff-del-text: #cf222e;
     }
     * { box-sizing: border-box; }
     body {
@@ -306,6 +314,24 @@
       background: var(--accent); color: #fff; padding: 0.65rem;
       font: inherit; font-size: 0.88rem; font-weight: 600; cursor: pointer;
     }
+
+    /* --- Activity detail / diff ----------------------------------------- */
+    .modal.modal-wide { max-width: 640px; }
+    .audit-detail-fields { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+    .audit-detail-fields .field-row { display: flex; gap: 0.4rem; }
+    .audit-detail-fields .field-label { color: var(--text-dim); flex: none; width: 6.5rem; }
+    .audit-detail-fields .field-value { flex: 1; min-width: 0; word-break: break-word; }
+    .diff-view {
+      border: 1px solid var(--border); border-radius: 0.7rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.78rem; line-height: 1.5; overflow: auto; max-height: 22rem;
+    }
+    .diff-line { display: flex; white-space: pre-wrap; word-break: break-word; padding: 0 0.4rem; }
+    .diff-line .diff-marker { flex: none; width: 1.2rem; color: var(--text-dimmer); user-select: none; }
+    .diff-add { background: var(--diff-add-bg); color: var(--diff-add-text); }
+    .diff-del { background: var(--diff-del-bg); color: var(--diff-del-text); }
+    .diff-ctx { color: var(--text-dim); }
+    .diff-empty { padding: 0.6rem; color: var(--text-dimmer); font-size: 0.8rem; }
 
     /* --- Messages ------------------------------------------------------ */
     #messages {
@@ -747,6 +773,18 @@
         <button type="button" class="round-button" id="audit-close" aria-label="Close">✕</button>
       </div>
       <div class="studio-list" id="audit-list"></div>
+    </div>
+  </div>
+
+  <!-- Activity detail (who did what, to what, when — diff for vault_write) -->
+  <div class="modal-scrim" id="audit-detail-scrim" hidden>
+    <div class="modal modal-wide" id="audit-detail">
+      <h2 id="audit-detail-title">Activity detail</h2>
+      <div class="audit-detail-fields" id="audit-detail-fields"></div>
+      <div id="audit-detail-diff"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="audit-detail-close">Close</button>
+      </div>
     </div>
   </div>
 
