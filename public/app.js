@@ -64,6 +64,7 @@ const editModel = $("edit-model");
 const editBadge = $("edit-badge");
 const editThinkingRow = $("edit-thinking-row");
 const editThinking = $("edit-thinking");
+const editStickyFallbackRow = $("edit-sticky-fallback-row");
 const editStickyFallback = $("edit-sticky-fallback");
 const editMemory = $("edit-memory");
 const editParticipants = $("edit-participants");
@@ -317,8 +318,20 @@ function updateThinkingVisibility(select, row, checkbox, badgeEl) {
   if (!supportsThinking) checkbox.checked = false;
   if (badgeEl) badgeEl.textContent = capabilityBadgeText(model);
 }
+// Sticky Gemini fallback only means anything for a Gemini model -- hide (and
+// force off) whenever an Anthropic model is selected, same pattern as the
+// Thinking checkbox above.
+function updateStickyFallbackVisibility(select, row, checkbox) {
+  const model = modelCatalogById.get(select.value);
+  const isGemini = Boolean(model && model.provider === "gemini");
+  row.hidden = !isGemini;
+  if (!isGemini) checkbox.checked = false;
+}
 newChatModel.addEventListener("change", () => updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge));
-editModel.addEventListener("change", () => updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge));
+editModel.addEventListener("change", () => {
+  updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+  updateStickyFallbackVisibility(editModel, editStickyFallbackRow, editStickyFallback);
+});
 personaFormModel.addEventListener("change", () => updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge));
 
 // --- Drawer ------------------------------------------------------------------
@@ -627,6 +640,7 @@ sheetEdit.addEventListener("click", async () => {
   editLinks = (data.personas || []).map((p) => ({ ...p }));
   renderEditParticipants();
   updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
+  updateStickyFallbackVisibility(editModel, editStickyFallbackRow, editStickyFallback);
   editStatus.textContent = "";
   editModalScrim.hidden = false;
 });
