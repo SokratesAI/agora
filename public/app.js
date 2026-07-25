@@ -72,6 +72,7 @@ const editAddPersona = $("edit-add-persona");
 const editAddPersonaBtn = $("edit-add-persona-btn");
 const editStatus = $("edit-status");
 const editCancel = $("edit-cancel");
+const editOpenPersonaEditorBtn = $("edit-open-persona-editor");
 
 const newChatModalScrim = $("new-chat-modal-scrim");
 const newChatModal = $("new-chat-modal");
@@ -84,6 +85,12 @@ const newChatModel = $("new-chat-model");
 const newChatBadge = $("new-chat-badge");
 const newChatThinkingRow = $("new-chat-thinking-row");
 const newChatThinking = $("new-chat-thinking");
+const newChatCapWebSearch = $("new-chat-cap-webSearch");
+const newChatCapVaultRead = $("new-chat-cap-vaultRead");
+const newChatCapVaultWrite = $("new-chat-cap-vaultWrite");
+const newChatCapCodeExecution = $("new-chat-cap-codeExecution");
+const newChatCapKubectlRead = $("new-chat-cap-kubectlRead");
+const newChatCapGithubRead = $("new-chat-cap-githubRead");
 const newChatStatus = $("new-chat-status");
 const newChatCancel = $("new-chat-cancel");
 
@@ -680,6 +687,16 @@ editModalScrim.addEventListener("click", (e) => {
 editCancel.addEventListener("click", () => {
   editModalScrim.hidden = true;
 });
+editOpenPersonaEditorBtn.addEventListener("click", () => {
+  const curator = editLinks.find((l) => l.role === "curator");
+  const persona = curator ? allPersonas.find((p) => p.id === curator.personaId) : null;
+  if (!persona) {
+    editStatus.textContent = "Curator persona not found.";
+    return;
+  }
+  editModalScrim.hidden = true;
+  openPersonaForm(persona);
+});
 editModal.addEventListener("submit", async (event) => {
   event.preventDefault();
   const targetId = editModal.dataset.targetId;
@@ -762,6 +779,13 @@ async function openNewChatModal() {
   newChatName.value = "";
   newChatPersonality.value = "";
   newChatThinking.checked = false;
+  // Same defaults as a brand-new persona in the Persona Studio.
+  newChatCapWebSearch.checked = true;
+  newChatCapVaultRead.checked = true;
+  newChatCapVaultWrite.checked = false;
+  newChatCapCodeExecution.checked = false;
+  newChatCapKubectlRead.checked = false;
+  newChatCapGithubRead.checked = false;
   newChatStatus.textContent = "";
   newChatModalScrim.hidden = false;
   newChatName.focus();
@@ -786,6 +810,14 @@ newChatModal.addEventListener("submit", async (event) => {
         personality: newChatPersonality.value.trim(),
         model: newChatModel.value,
         thinking: newChatThinkingRow.hidden ? false : newChatThinking.checked,
+        capabilities: {
+          webSearch: newChatCapWebSearch.checked,
+          vaultRead: newChatCapVaultRead.checked,
+          vaultWrite: newChatCapVaultWrite.checked,
+          codeExecution: newChatCapCodeExecution.checked,
+          kubectlRead: newChatCapKubectlRead.checked,
+          githubRead: newChatCapGithubRead.checked,
+        },
       };
   const { ok, data } = await api("POST", "/conversations", body);
   if (!ok) {

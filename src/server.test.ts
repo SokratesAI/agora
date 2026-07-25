@@ -250,6 +250,28 @@ describe("agora public app", () => {
     expect(personas.some((p) => p.name === "Coach")).toBe(true);
   });
 
+  it("POST /conversations applies capabilities to the inline-created persona", async () => {
+    const res = await request(app)
+      .post("/conversations")
+      .send({
+        name: "Sentinel",
+        personality: "watch the cluster",
+        model: "gemini:gemini-flash-latest",
+        capabilities: { kubectlRead: true, githubRead: true, vaultWrite: true },
+      });
+    expect(res.status).toBe(201);
+    const personaId = res.body.conversation.personas[0].personaId;
+    const persona = await deps.personas.get(personaId);
+    expect(persona?.capabilities).toMatchObject({
+      kubectlRead: true,
+      githubRead: true,
+      vaultWrite: true,
+      // Untouched fields keep DEFAULT_CAPABILITIES, same merge as PATCH /personas.
+      webSearch: true,
+      vaultRead: true,
+    });
+  });
+
   it("GET /conversations reflects live curator persona edits, not the stale inline fields (regression, 2026-07-22)", async () => {
     const created = await request(app)
       .post("/conversations")

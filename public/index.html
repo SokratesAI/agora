@@ -604,7 +604,11 @@
     <form class="modal" id="edit-modal">
       <h2>Edit conversation</h2>
       <input id="edit-name" type="text" placeholder="Conversation name" />
-      <h3>Curator persona (shared — edits apply everywhere it's used)</h3>
+      <div class="modal-row" style="justify-content:space-between;align-items:baseline;">
+        <h3 style="margin:0;">Curator persona (shared — edits apply everywhere it's used)</h3>
+        <button type="button" class="inline-button btn-secondary" id="edit-open-persona-editor">Full persona editor ↗</button>
+      </div>
+      <p class="modal-hint">Capabilities (web search, vault, cluster/GitHub access) aren't editable here — use the full editor above.</p>
       <textarea id="edit-personality" placeholder="Personality / system prompt..." rows="6"></textarea>
       <div class="modal-row">
         <select id="edit-model"></select>
@@ -657,6 +661,16 @@
           <input type="checkbox" id="new-chat-thinking" />
           Thinking
         </label>
+        <h3>Capabilities</h3>
+        <div class="capability-grid">
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-webSearch" /> Web search</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-vaultRead" /> Vault read</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-vaultWrite" /> Vault write (backs up before every overwrite)</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-codeExecution" /> Code execution</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-kubectlRead" /> Cluster access (read-only — no Secrets, ever)</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-githubRead" /> GitHub access (read-only — cannot open PRs, push, or comment)</label>
+        </div>
+        <p class="modal-hint">Enforced by the runner per call — cluster/system access is never available at any setting. Writes are audit-logged (Activity). Only applies when creating a new persona here — picking an existing one above uses its own saved capabilities.</p>
       </div>
       <p class="modal-status" id="new-chat-status"></p>
       <div class="modal-actions">

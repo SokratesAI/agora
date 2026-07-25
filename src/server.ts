@@ -198,12 +198,13 @@ async function resolveMain(deps: ServerDeps): Promise<Conversation> {
 
 function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
   app.post("/conversations", async (req, res) => {
-    const { name, personality, model, thinking, personaId } = req.body as {
+    const { name, personality, model, thinking, personaId, capabilities } = req.body as {
       name?: unknown;
       personality?: unknown;
       model?: unknown;
       thinking?: unknown;
       personaId?: unknown;
+      capabilities?: unknown;
     };
     if (typeof name !== "string" || name.length === 0) {
       res.status(400).json({ error: "name is required" });
@@ -234,6 +235,7 @@ function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
         personality: typeof personality === "string" ? personality : "",
         model: typeof model === "string" ? model : MODEL_CATALOG[0].id,
         thinking: typeof thinking === "boolean" ? thinking : false,
+        capabilities: parseCapabilities(capabilities),
       });
     }
     const conversation = await deps.conversations.create(
