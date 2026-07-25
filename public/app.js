@@ -33,6 +33,7 @@ const headerNewChatBtn = $("header-new-chat");
 const headerOverflowBtn = $("header-overflow");
 const navPersonas = $("nav-personas");
 const navHeartbeats = $("nav-heartbeats");
+const navWorkflows = $("nav-workflows");
 const navAudit = $("nav-audit");
 
 const actionSheetScrim = $("action-sheet-scrim");
@@ -141,6 +142,7 @@ const heartbeatFormTitle = $("heartbeat-form-title");
 const heartbeatFormName = $("heartbeat-form-name");
 const heartbeatFormPersona = $("heartbeat-form-persona");
 const heartbeatFormConversation = $("heartbeat-form-conversation");
+const heartbeatFormWorkflow = $("heartbeat-form-workflow");
 const heartbeatFormScheduleType = $("heartbeat-form-schedule-type");
 const heartbeatFormTime = $("heartbeat-form-time");
 const heartbeatFormInterval = $("heartbeat-form-interval");
@@ -150,6 +152,21 @@ const heartbeatFormVaultPaths = $("heartbeat-form-vault-paths");
 const heartbeatFormEnabled = $("heartbeat-form-enabled");
 const heartbeatFormStatus = $("heartbeat-form-status");
 const heartbeatFormCancel = $("heartbeat-form-cancel");
+
+const workflowStudioScrim = $("workflow-studio-scrim");
+const workflowStudioList = $("workflow-studio-list");
+const workflowStudioAdd = $("workflow-studio-add");
+const workflowStudioClose = $("workflow-studio-close");
+
+const workflowFormScrim = $("workflow-form-scrim");
+const workflowForm = $("workflow-form");
+const workflowFormTitle = $("workflow-form-title");
+const workflowFormName = $("workflow-form-name");
+const workflowFormDescription = $("workflow-form-description");
+const workflowFormSteps = $("workflow-form-steps");
+const workflowFormAddStep = $("workflow-form-add-step");
+const workflowFormStatus = $("workflow-form-status");
+const workflowFormCancel = $("workflow-form-cancel");
 
 const auditScrim = $("audit-scrim");
 const auditList = $("audit-list");
@@ -192,6 +209,9 @@ let lastRenderedMessages = [];
 let messageActionTarget = null;
 let personaFormEditId = null;
 let heartbeatFormEditId = null;
+let allWorkflows = [];
+let workflowFormEditId = null;
+let workflowFormStepsState = [];
 
 // --- Theme -----------------------------------------------------------------
 function applyTheme(theme) {
@@ -307,6 +327,12 @@ async function loadPersonas() {
   const { ok, data } = await api("GET", "/personas");
   if (!ok) return;
   allPersonas = data.personas;
+}
+
+async function loadWorkflows() {
+  const { ok, data } = await api("GET", "/workflows");
+  if (!ok) return;
+  allWorkflows = data.workflows;
 }
 
 async function loadModelCatalog() {
@@ -1030,7 +1056,7 @@ personaForm.addEventListener("submit", async (event) => {
 // --- Heartbeat Creator Studio ------------------------------------------------
 async function openHeartbeatStudio() {
   closeDrawer();
-  await Promise.all([loadPersonas(), loadConversationList()]);
+  await Promise.all([loadPersonas(), loadConversationList(), loadWorkflows()]);
   await renderHeartbeatStudio();
   heartbeatStudioScrim.hidden = false;
 }
@@ -1073,7 +1099,9 @@ function renderHeartbeatRow(heartbeat) {
   const last = heartbeat.lastRunAt
     ? `last: ${new Date(heartbeat.lastRunAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${heartbeat.lastResult ? ` (${heartbeat.lastResult})` : ""}`
     : "never run";
-  meta.textContent = `${heartbeat.schedule} · ${persona?.name || "?"} → ${conversation?.name || "?"} · ${last}`;
+  const workflow = heartbeat.workflowId ? allWorkflows.find((w) => w.id === heartbeat.workflowId) : null;
+  const target = workflow ? `workflow: ${workflow.name}` : `${persona?.name || "?"} → ${conversation?.name || "?"}`;
+  meta.textContent = `${heartbeat.schedule} · ${target} · ${last}`;
   main.append(name, meta);
   row.appendChild(main);
 
@@ -1138,9 +1166,17 @@ function openHeartbeatForm(heartbeat) {
     option.textContent = conversation.name + (conversation.archived ? " (archived)" : "");
     heartbeatFormConversation.appendChild(option);
   }
+  heartbeatFormWorkflow.innerHTML = '<option value="">None — a single curator turn (default)</option>';
+  for (const workflow of allWorkflows) {
+    const option = document.createElement("option");
+    option.value = workflow.id;
+    option.textContent = workflow.name;
+    heartbeatFormWorkflow.appendChild(option);
+  }
   if (heartbeat) {
     heartbeatFormPersona.value = heartbeat.personaId;
     heartbeatFormConversation.value = heartbeat.conversationId;
+    heartbeatFormWorkflow.value = heartbeat.workflowId || "";
     const schedule = heartbeat.schedule || "daily@08:00";
     if (schedule.startsWith("daily@")) {
       heartbeatFormScheduleType.value = "daily";
@@ -1184,6 +1220,7 @@ heartbeatForm.addEventListener("submit", async (event) => {
     conversationId: heartbeatFormConversation.value,
     schedule,
     task: heartbeatFormTask.value,
+    workflowId: heartbeatFormWorkflow.value || null,
     vaultPaths: heartbeatFormVaultPaths.value
       .split("\n")
       .map((p) => p.trim())
@@ -1200,6 +1237,234 @@ heartbeatForm.addEventListener("submit", async (event) => {
   }
   heartbeatFormScrim.hidden = true;
   renderHeartbeatStudio();
+});
+
+// --- Workflow Creator Studio (Decisions/0009) -------------------------------
+// One checkbox per user-facing concept; "Vault read" expands to both
+// vault_read and vault_list tool names since the runner gates them
+// separately but this Studio always grants/denies them together.
+const WORKFLOW_TOOL_OPTIONS = [
+  { label: "Web search", tokens: ["web_search"] },
+  { label: "Vault read", tokens: ["vault_read", "vault_list"] },
+  { label: "Vault write", tokens: ["vault_write"] },
+  { label: "Kubectl read", tokens: ["kubectl_read"] },
+  { label: "GitHub read", tokens: ["github_read"] },
+  { label: "Scoped write (this step's file only)", tokens: ["scoped_write"] },
+];
+
+async function openWorkflowStudio() {
+  closeDrawer();
+  await loadWorkflows();
+  renderWorkflowStudio();
+  workflowStudioScrim.hidden = false;
+}
+navWorkflows.addEventListener("click", openWorkflowStudio);
+workflowStudioClose.addEventListener("click", () => {
+  workflowStudioScrim.hidden = true;
+});
+workflowStudioScrim.addEventListener("click", (e) => {
+  if (e.target === workflowStudioScrim) workflowStudioScrim.hidden = true;
+});
+
+function renderWorkflowStudio() {
+  workflowStudioList.innerHTML = "";
+  if (!allWorkflows.length) {
+    const empty = document.createElement("div");
+    empty.className = "studio-empty";
+    empty.textContent = "No workflows yet. A workflow is a bounded, multi-step, multi-persona turn sequence a heartbeat can run instead of a single curator turn.";
+    workflowStudioList.appendChild(empty);
+    return;
+  }
+  for (const workflow of allWorkflows) {
+    workflowStudioList.appendChild(renderWorkflowRow(workflow));
+  }
+}
+
+function renderWorkflowRow(workflow) {
+  const row = document.createElement("div");
+  row.className = "studio-item";
+  const main = document.createElement("div");
+  main.className = "studio-item-main";
+  const name = document.createElement("span");
+  name.className = "studio-item-name";
+  name.textContent = workflow.name;
+  const meta = document.createElement("span");
+  meta.className = "studio-item-meta";
+  const totalRounds = workflow.steps.reduce((sum, s) => sum + (s.loopCount || 0), 0);
+  meta.textContent = `${workflow.steps.length} step${workflow.steps.length === 1 ? "" : "s"} · ${totalRounds} round${totalRounds === 1 ? "" : "s"} total${workflow.description ? ` · ${workflow.description}` : ""}`;
+  main.append(name, meta);
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "studio-item-actions";
+  const del = document.createElement("button");
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete workflow "${workflow.name}"?`)) return;
+    const { ok, data } = await api("DELETE", `/workflows/${workflow.id}`);
+    if (!ok) {
+      alert(data.error + (data.heartbeats ? `: ${data.heartbeats.join(", ")}` : ""));
+      return;
+    }
+    await loadWorkflows();
+    renderWorkflowStudio();
+  });
+  actions.append(del);
+  row.appendChild(actions);
+  row.addEventListener("click", () => openWorkflowForm(workflow));
+  return row;
+}
+
+workflowStudioAdd.addEventListener("click", () => openWorkflowForm(null));
+
+function renderWorkflowFormStepsUI() {
+  workflowFormSteps.innerHTML = "";
+  workflowFormStepsState.forEach((step, index) => {
+    workflowFormSteps.appendChild(renderStepFieldset(step, index));
+  });
+}
+
+function renderStepFieldset(step, index) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "workflow-step";
+
+  const header = document.createElement("div");
+  header.className = "workflow-step-header";
+  const label = document.createElement("span");
+  label.textContent = `Step ${index + 1}`;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn-secondary";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", () => {
+    workflowFormStepsState.splice(index, 1);
+    renderWorkflowFormStepsUI();
+  });
+  header.append(label, remove);
+  fieldset.appendChild(header);
+
+  const prompt = document.createElement("textarea");
+  prompt.rows = 3;
+  prompt.placeholder = "Prompt layered onto each participant for this step (e.g. 'Critique the prior turn constructively.')";
+  prompt.value = step.prompt;
+  prompt.addEventListener("input", () => {
+    step.prompt = prompt.value;
+  });
+  fieldset.appendChild(prompt);
+
+  const row = document.createElement("div");
+  row.className = "modal-row";
+  const loopLabel = document.createElement("label");
+  loopLabel.textContent = "Rounds";
+  const loopInput = document.createElement("input");
+  loopInput.type = "number";
+  loopInput.min = "1";
+  loopInput.value = String(step.loopCount);
+  loopInput.style.width = "4.5rem";
+  loopInput.addEventListener("input", () => {
+    const n = parseInt(loopInput.value, 10);
+    step.loopCount = Number.isFinite(n) && n >= 1 ? n : 1;
+  });
+  loopLabel.appendChild(loopInput);
+  row.appendChild(loopLabel);
+  fieldset.appendChild(row);
+
+  const filepath = document.createElement("input");
+  filepath.type = "text";
+  filepath.placeholder = "File scope (optional) — exact file, or a folder ending in / to create+lock the first write";
+  filepath.value = step.filepath || "";
+  filepath.addEventListener("input", () => {
+    step.filepath = filepath.value.trim() || undefined;
+  });
+  fieldset.appendChild(filepath);
+
+  const toolsLabel = document.createElement("div");
+  toolsLabel.className = "modal-hint";
+  toolsLabel.textContent = "Tool whitelist (none checked = unrestricted, each participant's own capabilities apply)";
+  fieldset.appendChild(toolsLabel);
+
+  const toolsRow = document.createElement("div");
+  toolsRow.className = "workflow-step-tools";
+  for (const option of WORKFLOW_TOOL_OPTIONS) {
+    const checkboxLabel = document.createElement("label");
+    checkboxLabel.className = "checkbox-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = option.tokens.every((t) => step.toolWhitelist.includes(t));
+    checkbox.addEventListener("change", () => {
+      const withoutThisOption = step.toolWhitelist.filter((t) => !option.tokens.includes(t));
+      step.toolWhitelist = checkbox.checked ? [...withoutThisOption, ...option.tokens] : withoutThisOption;
+    });
+    checkboxLabel.append(checkbox, document.createTextNode(` ${option.label}`));
+    toolsRow.appendChild(checkboxLabel);
+  }
+  fieldset.appendChild(toolsRow);
+
+  const workflowRefSelect = document.createElement("select");
+  const noneOption = document.createElement("option");
+  noneOption.value = "";
+  noneOption.textContent = "Not a sub-workflow step";
+  workflowRefSelect.appendChild(noneOption);
+  for (const workflow of allWorkflows.filter((w) => w.id !== workflowFormEditId)) {
+    const option = document.createElement("option");
+    option.value = workflow.id;
+    option.textContent = `Run workflow: ${workflow.name}`;
+    workflowRefSelect.appendChild(option);
+  }
+  workflowRefSelect.value = step.workflowRef || "";
+  workflowRefSelect.addEventListener("change", () => {
+    step.workflowRef = workflowRefSelect.value || undefined;
+  });
+  fieldset.appendChild(workflowRefSelect);
+
+  return fieldset;
+}
+
+workflowFormAddStep.addEventListener("click", () => {
+  workflowFormStepsState.push({ prompt: "", loopCount: 3, toolWhitelist: [] });
+  renderWorkflowFormStepsUI();
+});
+
+function openWorkflowForm(workflow) {
+  workflowFormEditId = workflow ? workflow.id : null;
+  workflowFormTitle.textContent = workflow ? `Edit ${workflow.name}` : "New workflow";
+  workflowFormName.value = workflow?.name || "";
+  workflowFormDescription.value = workflow?.description || "";
+  // Deep-ish copy so editing in the form doesn't mutate allWorkflows until Save.
+  workflowFormStepsState = (workflow?.steps || []).map((s) => ({ ...s, toolWhitelist: [...s.toolWhitelist] }));
+  renderWorkflowFormStepsUI();
+  workflowFormStatus.textContent = "";
+  workflowFormScrim.hidden = false;
+}
+
+workflowFormScrim.addEventListener("click", (e) => {
+  if (e.target === workflowFormScrim) workflowFormScrim.hidden = true;
+});
+workflowFormCancel.addEventListener("click", () => {
+  workflowFormScrim.hidden = true;
+});
+workflowForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = workflowFormName.value.trim();
+  if (!name) return;
+  const body = {
+    name,
+    description: workflowFormDescription.value,
+    steps: workflowFormStepsState,
+  };
+  workflowFormStatus.textContent = "Saving...";
+  const { ok, data } = workflowFormEditId
+    ? await api("PATCH", `/workflows/${workflowFormEditId}`, body)
+    : await api("POST", "/workflows", body);
+  if (!ok) {
+    workflowFormStatus.textContent = data.error || "Failed to save.";
+    return;
+  }
+  workflowFormScrim.hidden = true;
+  await loadWorkflows();
+  renderWorkflowStudio();
 });
 
 // --- Activity (audit) --------------------------------------------------------

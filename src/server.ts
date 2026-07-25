@@ -13,6 +13,8 @@ import type {
 import type { PersonaStore, PersonaCapabilities } from "./chat/persona-store.js";
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
 import { SCHEDULE_RE } from "./chat/heartbeat-store.js";
+import type { WorkflowStore, WorkflowUpdate, Step } from "./chat/workflow-store.js";
+import { wouldCreateCycle } from "./chat/workflow-store.js";
 import type { AuditStore } from "./chat/audit-store.js";
 import { MAX_ATTACHMENT_BYTES, type AttachmentStore } from "./chat/attachment-store.js";
 import { MODEL_CATALOG } from "./models.js";
@@ -48,6 +50,7 @@ export interface ServerDeps {
   conversations: ConversationStore;
   personas: PersonaStore;
   heartbeats: HeartbeatStore;
+  workflows: WorkflowStore;
   audit: AuditStore;
   attachments: AttachmentStore;
   webPush: WebPushSender;
@@ -80,6 +83,34 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     if (typeof b[key] === "boolean") out[key] = b[key];
   }
   return out;
+}
+
+/** Parses+validates a Workflow's steps array from a request body.
+ * Returns an error string on the first problem found, or `undefined` if
+ * `steps` is valid (including an empty array — a Workflow with no steps
+ * yet is fine, same as an empty vaultPaths on Heartbeat). */
+function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
+  if (body === undefined) return { steps: [] };
+  if (!Array.isArray(body)) return { error: "steps must be an array" };
+  const steps: Step[] = [];
+  for (const raw of body) {
+    if (typeof raw !== "object" || raw === null) return { error: "each step must be an object" };
+    const s = raw as Record<string, unknown>;
+    if (typeof s.prompt !== "string") return { error: "step.prompt must be a string" };
+    if (typeof s.loopCount !== "number" || !Number.isInteger(s.loopCount) || s.loopCount < 1) {
+      return { error: "step.loopCount must be a positive integer" };
+    }
+    const toolWhitelist = Array.isArray(s.toolWhitelist)
+      ? (s.toolWhitelist as unknown[]).filter((t): t is string => typeof t === "string")
+      : [];
+    const filepath = typeof s.filepath === "string" && s.filepath.length > 0 ? s.filepath : undefined;
+    if (toolWhitelist.includes("scoped_write") && !filepath) {
+      return { error: "step.filepath is required when scoped_write is in toolWhitelist" };
+    }
+    const workflowRef = typeof s.workflowRef === "string" && s.workflowRef.length > 0 ? s.workflowRef : undefined;
+    steps.push({ prompt: s.prompt, loopCount: s.loopCount, toolWhitelist, ...(filepath ? { filepath } : {}), ...(workflowRef ? { workflowRef } : {}) });
+  }
+  return { steps };
 }
 
 /** Joined view (Architecture §2): the curator persona's live fields ride
@@ -314,7 +345,7 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
  * platform (agent-facing writes live on the internal app, ADR 0007).
  */
 export function createPublicApp(deps: ServerDeps): Express {
-  const { config, store, conversations, personas, heartbeats, audit, attachments, logger } = deps;
+  const { config, store, conversations, personas, heartbeats, workflows, audit, attachments, logger } = deps;
   const app = express();
   // Memory storage — files are small (MAX_ATTACHMENT_BYTES caps it) and
   // written straight through to AttachmentStore's own disk layout; no
@@ -635,6 +666,10 @@ export function createPublicApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown conversation" });
       return;
     }
+    if (body.workflowId !== undefined && !(await workflows.get(body.workflowId as string))) {
+      res.status(400).json({ error: "unknown workflow" });
+      return;
+    }
     const vaultPaths = Array.isArray(body.vaultPaths)
       ? (body.vaultPaths as unknown[]).filter((p): p is string => typeof p === "string")
       : [];
@@ -644,6 +679,7 @@ export function createPublicApp(deps: ServerDeps): Express {
       conversationId: body.conversationId,
       schedule: body.schedule,
       task: typeof body.task === "string" ? body.task : "",
+      workflowId: typeof body.workflowId === "string" ? body.workflowId : undefined,
       vaultPaths,
       enabled: typeof body.enabled === "boolean" ? body.enabled : true,
     });
@@ -667,12 +703,23 @@ export function createPublicApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown conversation" });
       return;
     }
+    if (
+      body.workflowId !== undefined &&
+      body.workflowId !== null &&
+      !(await workflows.get(body.workflowId as string))
+    ) {
+      res.status(400).json({ error: "unknown workflow" });
+      return;
+    }
     const updates: HeartbeatUpdate = {};
     if (typeof body.name === "string") updates.name = body.name;
     if (typeof body.personaId === "string") updates.personaId = body.personaId;
     if (typeof body.conversationId === "string") updates.conversationId = body.conversationId;
     if (typeof body.schedule === "string") updates.schedule = body.schedule;
     if (typeof body.task === "string") updates.task = body.task;
+    if (typeof body.workflowId === "string" || body.workflowId === null) {
+      updates.workflowId = body.workflowId;
+    }
     if (Array.isArray(body.vaultPaths)) {
       updates.vaultPaths = (body.vaultPaths as unknown[]).filter(
         (p): p is string => typeof p === "string",
@@ -703,6 +750,103 @@ export function createPublicApp(deps: ServerDeps): Express {
       return;
     }
     res.status(200).json({ status: "queued", heartbeat });
+  });
+
+  // ---- Workflows (Decisions/0009) ---------------------------------------
+  app.get("/workflows", async (_req, res) => {
+    res.status(200).json({ workflows: await workflows.list() });
+  });
+
+  app.post("/workflows", async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const parsed = parseSteps(body.steps);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const existing = await workflows.list();
+    for (const step of parsed.steps) {
+      if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
+        res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
+        return;
+      }
+    }
+    // No cycle-check needed on create: nothing can already reference a
+    // workflow id that doesn't exist yet, so a brand-new workflow can
+    // never be part of a pre-existing cycle back to itself. Cycle-checking
+    // matters on update, once other workflows may already point at this id.
+    const workflow = await workflows.create({
+      name: body.name,
+      description: typeof body.description === "string" ? body.description : "",
+      steps: parsed.steps,
+    });
+    res.status(201).json({ status: "created", workflow });
+  });
+
+  app.get("/workflows/:id", async (req, res) => {
+    const workflow = await workflows.get(req.params.id);
+    if (!workflow) {
+      res.status(404).json({ error: "workflow not found" });
+      return;
+    }
+    res.status(200).json({ workflow });
+  });
+
+  app.patch("/workflows/:id", async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const updates: WorkflowUpdate = {};
+    if (typeof body.name === "string") updates.name = body.name;
+    if (typeof body.description === "string") updates.description = body.description;
+    if (body.steps !== undefined) {
+      const parsed = parseSteps(body.steps);
+      if ("error" in parsed) {
+        res.status(400).json({ error: parsed.error });
+        return;
+      }
+      const existing = await workflows.list();
+      for (const step of parsed.steps) {
+        if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
+          res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
+          return;
+        }
+      }
+      if (wouldCreateCycle(existing, req.params.id, parsed.steps)) {
+        res.status(400).json({ error: "step.workflowRef would create a cycle" });
+        return;
+      }
+      updates.steps = parsed.steps;
+    }
+    const workflow = await workflows.update(req.params.id, updates);
+    if (!workflow) {
+      res.status(404).json({ error: "workflow not found" });
+      return;
+    }
+    res.status(200).json({ status: "updated", workflow });
+  });
+
+  app.delete("/workflows/:id", async (req, res) => {
+    // Referential guard, same shape as Persona's — a heartbeat pointing at
+    // a deleted workflow would break the runner's fetch.
+    const usedByHeartbeats = (await heartbeats.list()).filter(
+      (h) => h.workflowId === req.params.id,
+    );
+    if (usedByHeartbeats.length > 0) {
+      res.status(409).json({
+        error: "workflow is in use",
+        heartbeats: usedByHeartbeats.map((h) => h.name),
+      });
+      return;
+    }
+    const deleted = await workflows.delete(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: "workflow not found" });
+      return;
+    }
+    res.status(200).json({ status: "deleted" });
   });
 
   // ---- Audit ------------------------------------------------------------
@@ -898,7 +1042,7 @@ export function createPublicApp(deps: ServerDeps): Express {
  * cluster-internal, the token keeps arbitrary in-cluster pods out.
  */
 export function createInternalApp(deps: ServerDeps): Express {
-  const { config, store, conversations, personas, heartbeats, audit, webPush, logger } = deps;
+  const { config, store, conversations, personas, heartbeats, workflows, audit, webPush, logger } = deps;
   const app = express();
   app.use(express.json());
 
@@ -941,6 +1085,18 @@ export function createInternalApp(deps: ServerDeps): Express {
       return;
     }
     res.status(200).json({ status: "updated", persona });
+  });
+
+  // Runner's read path when a due heartbeat has workflowId set — no
+  // internal write-back needed, run results still land on
+  // Heartbeat.lastRunAt/lastResult via the existing PATCH below.
+  app.get("/workflows/:id", async (req, res) => {
+    const workflow = await workflows.get(req.params.id);
+    if (!workflow) {
+      res.status(404).json({ error: "workflow not found" });
+      return;
+    }
+    res.status(200).json({ workflow });
   });
 
   app.get("/heartbeats", async (_req, res) => {

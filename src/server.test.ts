@@ -14,6 +14,7 @@ import { MessageStore } from "./chat/message-store.js";
 import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
 import { HeartbeatStore } from "./chat/heartbeat-store.js";
+import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
 import type { Config } from "./config.js";
@@ -55,6 +56,7 @@ async function makeDeps(configOverrides: Partial<Config> = {}): Promise<
     conversations: new ConversationStore(dir),
     personas: new PersonaStore(dir),
     heartbeats: new HeartbeatStore(dir),
+    workflows: new WorkflowStore(dir),
     audit: new AuditStore(dir),
     attachments: new AttachmentStore(dir),
     webPush,
@@ -607,6 +609,110 @@ describe("agora public app", () => {
     expect(refused.body.heartbeats).toEqual(["keeper"]);
   });
 
+  // ---- Workflows (Decisions/0009) ----------------------------------------
+  it("POST /workflows validates name, step shape, and creates with steps", async () => {
+    expect((await request(app).post("/workflows").send({})).status).toBe(400);
+    expect(
+      (await request(app).post("/workflows").send({ name: "Discuss", steps: "nope" })).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post("/workflows")
+          .send({ name: "Discuss", steps: [{ prompt: "x", loopCount: 0, toolWhitelist: [] }] })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post("/workflows")
+          .send({
+            name: "Plan",
+            steps: [{ prompt: "x", loopCount: 1, toolWhitelist: ["scoped_write"] }],
+          })
+      ).status,
+    ).toBe(400);
+
+    const res = await request(app)
+      .post("/workflows")
+      .send({
+        name: "Discuss",
+        description: "critique loop",
+        steps: [
+          { prompt: "Critique the prior turn.", loopCount: 3, toolWhitelist: ["vault_read", "web_search"] },
+        ],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.workflow.steps).toHaveLength(1);
+    expect(res.body.workflow.steps[0].loopCount).toBe(3);
+  });
+
+  it("POST /workflows rejects an unknown workflowRef and a cyclic one on update", async () => {
+    expect(
+      (
+        await request(app)
+          .post("/workflows")
+          .send({ name: "A", steps: [{ prompt: "", loopCount: 1, toolWhitelist: [], workflowRef: "ghost" }] })
+      ).status,
+    ).toBe(400);
+
+    const a = await request(app).post("/workflows").send({ name: "A", steps: [] });
+    const b = await request(app)
+      .post("/workflows")
+      .send({
+        name: "B",
+        steps: [{ prompt: "", loopCount: 1, toolWhitelist: [], workflowRef: a.body.workflow.id }],
+      });
+    expect(b.status).toBe(201);
+
+    const cyclic = await request(app)
+      .patch(`/workflows/${a.body.workflow.id}`)
+      .send({ steps: [{ prompt: "", loopCount: 1, toolWhitelist: [], workflowRef: b.body.workflow.id }] });
+    expect(cyclic.status).toBe(400);
+    expect(cyclic.body.error).toMatch(/cycle/);
+  });
+
+  it("DELETE /workflows/:id refuses while a heartbeat references it", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const workflow = await request(app).post("/workflows").send({ name: "Bound", steps: [] });
+    await request(app).post("/heartbeats").send({
+      name: "wf-hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@1h",
+      workflowId: workflow.body.workflow.id,
+    });
+    const refused = await request(app).delete(`/workflows/${workflow.body.workflow.id}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.heartbeats).toEqual(["wf-hb"]);
+  });
+
+  it("POST /heartbeats validates workflowId when provided", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    expect(
+      (
+        await request(app).post("/heartbeats").send({
+          name: "bad-wf",
+          personaId: persona.id,
+          conversationId: conversation.id,
+          schedule: "every@1h",
+          workflowId: "ghost",
+        })
+      ).status,
+    ).toBe(400);
+
+    const workflow = await request(app).post("/workflows").send({ name: "Real", steps: [] });
+    const res = await request(app).post("/heartbeats").send({
+      name: "good-wf",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@1h",
+      workflowId: workflow.body.workflow.id,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.heartbeat.workflowId).toBe(workflow.body.workflow.id);
+  });
+
   // ---- Search / audit ---------------------------------------------------
   it("GET /search covers conversations without double-reporting Main", async () => {
     await request(app).post("/reply").send({ text: "needle in main" });
@@ -759,6 +865,17 @@ describe("agora internal app", () => {
 
   it("stays open when no token is configured (deploy-order safety)", async () => {
     expect((await request(app).get("/heartbeats")).status).toBe(200);
+  });
+
+  it("GET /workflows/:id serves the definition to the runner", async () => {
+    const workflow = await deps.workflows.create({
+      name: "Discuss",
+      steps: [{ prompt: "Critique.", loopCount: 2, toolWhitelist: [] }],
+    });
+    const res = await request(app).get(`/workflows/${workflow.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.workflow.steps).toHaveLength(1);
+    expect((await request(app).get("/workflows/ghost")).status).toBe(404);
   });
 
   it("GET /personas/:id serves capability records to the runner", async () => {

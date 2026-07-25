@@ -246,6 +246,20 @@
       display: flex; flex-direction: column; gap: 0.3rem;
       border: 1px solid var(--border); border-radius: 0.7rem; padding: 0.5rem 0.6rem;
     }
+    .workflow-step {
+      display: flex; flex-direction: column; gap: 0.45rem;
+      border: 1px solid var(--border); border-radius: 0.8rem; padding: 0.6rem;
+      margin: 0.4rem 0;
+    }
+    .workflow-step-header {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 0.8rem; color: var(--text-dim); font-weight: 600;
+    }
+    .workflow-step-header button { width: auto; padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+    .workflow-step-tools {
+      display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem;
+      border: 1px solid var(--border); border-radius: 0.7rem; padding: 0.4rem 0.6rem;
+    }
     .template-row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .template-chip {
       font-size: 0.75rem; background: var(--bg-input);
@@ -521,6 +535,10 @@
         <span class="drawer-nav-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span>
         Heartbeats
       </button>
+      <button type="button" class="drawer-nav-row" id="nav-workflows">
+        <span class="drawer-nav-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="7" height="6" rx="1"/><rect x="13.5" y="14" width="7" height="6" rx="1"/><path d="M7 10v4a2 2 0 0 0 2 2h1M17 14v-2a2 2 0 0 0-2-2h-1"/></svg></span>
+        Workflows
+      </button>
       <button type="button" class="drawer-nav-row" id="nav-audit">
         <span class="drawer-nav-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16M4 12h16M4 19h10"/></svg></span>
         Activity
@@ -770,6 +788,11 @@
       <select id="heartbeat-form-persona"></select>
       <select id="heartbeat-form-conversation"></select>
       <p class="modal-hint">The turn uses that conversation's history as context and replies into it (with a push).</p>
+      <h3>Run as workflow (optional)</h3>
+      <select id="heartbeat-form-workflow">
+        <option value="">None — a single curator turn (default)</option>
+      </select>
+      <p class="modal-hint">When set, the turn runs the workflow's steps against the conversation's own personas instead of the single persona above (Decisions/0009).</p>
       <h3>Schedule</h3>
       <div class="modal-row">
         <select id="heartbeat-form-schedule-type">
@@ -792,6 +815,36 @@
       <p class="modal-status" id="heartbeat-form-status"></p>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" id="heartbeat-form-cancel">Cancel</button>
+        <button type="submit" class="btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Workflow Studio (Decisions/0009) -->
+  <div class="studio-scrim" id="workflow-studio-scrim" hidden>
+    <div class="studio-panel">
+      <div class="studio-header">
+        <h2>Workflows</h2>
+        <button type="button" class="round-button" id="workflow-studio-close" aria-label="Close">✕</button>
+      </div>
+      <div class="studio-list" id="workflow-studio-list"></div>
+      <button type="button" class="studio-add-btn" id="workflow-studio-add">＋ New workflow</button>
+    </div>
+  </div>
+
+  <!-- Workflow form -->
+  <div class="modal-scrim" id="workflow-form-scrim" hidden>
+    <form class="modal" id="workflow-form">
+      <h2 id="workflow-form-title">New workflow</h2>
+      <input id="workflow-form-name" type="text" placeholder="Name (e.g. Discuss)" required />
+      <textarea id="workflow-form-description" placeholder="What this workflow is for..." rows="2"></textarea>
+      <h3>Steps</h3>
+      <p class="modal-hint">Each step runs `loopCount` rounds of round-robin turn-taking across the conversation's own personas. Turn order continues across steps, never resets.</p>
+      <div id="workflow-form-steps"></div>
+      <button type="button" class="inline-button btn-secondary" id="workflow-form-add-step">＋ Add step</button>
+      <p class="modal-status" id="workflow-form-status"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="workflow-form-cancel">Cancel</button>
         <button type="submit" class="btn-primary">Save</button>
       </div>
     </form>
