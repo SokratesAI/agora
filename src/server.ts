@@ -10,7 +10,7 @@ import type {
   ConversationUpdate,
   PersonaLink,
 } from "./chat/conversation-store.js";
-import type { PersonaStore, PersonaCapabilities } from "./chat/persona-store.js";
+import type { PersonaStore, PersonaCapabilities, Persona } from "./chat/persona-store.js";
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
 import { SCHEDULE_RE } from "./chat/heartbeat-store.js";
 import type { WorkflowStore, WorkflowUpdate, Step } from "./chat/workflow-store.js";
@@ -79,6 +79,7 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "codeExecution",
     "kubectlRead",
     "githubRead",
+    "manageAgora",
   ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }
@@ -210,6 +211,23 @@ async function validatePersonaLinks(
   return parsed;
 }
 
+/** Find-or-create a conversation by name with the given persona as sole
+ * curator — same "reuse if a conversation already has this name" shape as
+ * POST /conversations' inline-persona path. Used by the Heartbeat Creator's
+ * "new empty channel" option, which needs the id of a fresh conversation
+ * without a separate round-trip to create it first. */
+async function findOrCreateConversationForPersona(
+  name: string,
+  persona: Persona,
+  deps: ServerDeps,
+): Promise<Conversation> {
+  const existing = await deps.conversations.findByName(name);
+  if (existing) return existing;
+  return deps.conversations.create(name, persona.personality, persona.model, persona.thinking, [
+    { personaId: persona.id, role: "curator" },
+  ]);
+}
+
 /** Find-or-create the "Main" conversation the legacy shim routes target
  * (ADR 0008) — normally created by the startup migration; the lazy path
  * only fires on a fresh install with no history. */
@@ -225,6 +243,137 @@ async function resolveMain(deps: ServerDeps): Promise<Conversation> {
   return deps.conversations.create("Main", "", persona.model, persona.thinking, [
     { personaId: persona.id, role: "curator" },
   ]);
+}
+
+/** Factored out (alongside the Heartbeat/Workflow create routes below) so
+ * both the public app and the internal agent-facing app can register it —
+ * ADR 0007's "agent-facing writes live on the internal app" principle,
+ * needed for the runner's create_persona tool. */
+function registerCreatePersonaRoute(app: Express, deps: ServerDeps): void {
+  app.post("/personas", async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    if (typeof body.model !== "string" || !VALID_MODEL_IDS.has(body.model)) {
+      res.status(400).json({ error: "unknown model" });
+      return;
+    }
+    const persona = await deps.personas.create({
+      name: body.name,
+      personality: typeof body.personality === "string" ? body.personality : "",
+      model: body.model,
+      thinking: typeof body.thinking === "boolean" ? body.thinking : false,
+      capabilities: parseCapabilities(body.capabilities),
+      sharedMemory: typeof body.sharedMemory === "string" ? body.sharedMemory : "",
+      isTemplate: typeof body.isTemplate === "boolean" ? body.isTemplate : false,
+    });
+    res.status(201).json({ status: "created", persona });
+  });
+}
+
+/** See registerCreatePersonaRoute's docstring. */
+function registerCreateHeartbeatRoute(app: Express, deps: ServerDeps): void {
+  app.post("/heartbeats", async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    if (typeof body.schedule !== "string" || !SCHEDULE_RE.test(body.schedule)) {
+      res.status(400).json({ error: "schedule must be daily@HH:MM or every@N[m|h]" });
+      return;
+    }
+    if (typeof body.personaId !== "string") {
+      res.status(400).json({ error: "personaId is required" });
+      return;
+    }
+    const persona = await deps.personas.get(body.personaId);
+    if (!persona) {
+      res.status(400).json({ error: "unknown persona" });
+      return;
+    }
+
+    let conversationId: string;
+    if (typeof body.conversationId === "string") {
+      if (!(await deps.conversations.get(body.conversationId))) {
+        res.status(400).json({ error: "unknown conversation" });
+        return;
+      }
+      conversationId = body.conversationId;
+    } else if (
+      typeof body.newConversationName === "string" &&
+      body.newConversationName.length > 0
+    ) {
+      // Inline empty-channel creation (previously you had to create the
+      // channel and persona separately first, then create the heartbeat) —
+      // the persona speaks into a brand new conversation created just for
+      // this heartbeat, same shape as a manual New Conversation using an
+      // existing persona.
+      const conversation = await findOrCreateConversationForPersona(
+        body.newConversationName,
+        persona,
+        deps,
+      );
+      conversationId = conversation.id;
+    } else {
+      res.status(400).json({ error: "conversationId or newConversationName is required" });
+      return;
+    }
+
+    if (body.workflowId !== undefined && !(await deps.workflows.get(body.workflowId as string))) {
+      res.status(400).json({ error: "unknown workflow" });
+      return;
+    }
+    const vaultPaths = Array.isArray(body.vaultPaths)
+      ? (body.vaultPaths as unknown[]).filter((p): p is string => typeof p === "string")
+      : [];
+    const heartbeat = await deps.heartbeats.create({
+      name: body.name,
+      personaId: body.personaId,
+      conversationId,
+      schedule: body.schedule,
+      task: typeof body.task === "string" ? body.task : "",
+      workflowId: typeof body.workflowId === "string" ? body.workflowId : undefined,
+      vaultPaths,
+      enabled: typeof body.enabled === "boolean" ? body.enabled : true,
+    });
+    res.status(201).json({ status: "created", heartbeat });
+  });
+}
+
+/** See registerCreatePersonaRoute's docstring. */
+function registerCreateWorkflowRoute(app: Express, deps: ServerDeps): void {
+  app.post("/workflows", async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const parsed = parseSteps(body.steps);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const existing = await deps.workflows.list();
+    for (const step of parsed.steps) {
+      if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
+        res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
+        return;
+      }
+    }
+    // No cycle-check needed on create: nothing can already reference a
+    // workflow id that doesn't exist yet, so a brand-new workflow can
+    // never be part of a pre-existing cycle back to itself. Cycle-checking
+    // matters on update, once other workflows may already point at this id.
+    const workflow = await deps.workflows.create({
+      name: body.name,
+      description: typeof body.description === "string" ? body.description : "",
+      steps: parsed.steps,
+    });
+    res.status(201).json({ status: "created", workflow });
+  });
 }
 
 function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
@@ -505,6 +654,9 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   registerCreateConversationRoute(app, deps);
   registerUpdateConversationRoute(app, deps);
+  registerCreatePersonaRoute(app, deps);
+  registerCreateHeartbeatRoute(app, deps);
+  registerCreateWorkflowRoute(app, deps);
 
   app.get("/models", (_req, res) => {
     res.status(200).json({ models: MODEL_CATALOG });
@@ -513,28 +665,6 @@ export function createPublicApp(deps: ServerDeps): Express {
   // ---- Personas ---------------------------------------------------------
   app.get("/personas", async (_req, res) => {
     res.status(200).json({ personas: await personas.list() });
-  });
-
-  app.post("/personas", async (req, res) => {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.name !== "string" || body.name.length === 0) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
-    if (typeof body.model !== "string" || !VALID_MODEL_IDS.has(body.model)) {
-      res.status(400).json({ error: "unknown model" });
-      return;
-    }
-    const persona = await personas.create({
-      name: body.name,
-      personality: typeof body.personality === "string" ? body.personality : "",
-      model: body.model,
-      thinking: typeof body.thinking === "boolean" ? body.thinking : false,
-      capabilities: parseCapabilities(body.capabilities),
-      sharedMemory: typeof body.sharedMemory === "string" ? body.sharedMemory : "",
-      isTemplate: typeof body.isTemplate === "boolean" ? body.isTemplate : false,
-    });
-    res.status(201).json({ status: "created", persona });
   });
 
   app.get("/personas/:id", async (req, res) => {
@@ -645,47 +775,6 @@ export function createPublicApp(deps: ServerDeps): Express {
     res.status(200).json({ heartbeats: await heartbeats.list() });
   });
 
-  app.post("/heartbeats", async (req, res) => {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.name !== "string" || body.name.length === 0) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
-    if (typeof body.schedule !== "string" || !SCHEDULE_RE.test(body.schedule)) {
-      res.status(400).json({ error: "schedule must be daily@HH:MM or every@N[m|h]" });
-      return;
-    }
-    if (typeof body.personaId !== "string" || !(await personas.get(body.personaId))) {
-      res.status(400).json({ error: "unknown persona" });
-      return;
-    }
-    if (
-      typeof body.conversationId !== "string" ||
-      !(await conversations.get(body.conversationId))
-    ) {
-      res.status(400).json({ error: "unknown conversation" });
-      return;
-    }
-    if (body.workflowId !== undefined && !(await workflows.get(body.workflowId as string))) {
-      res.status(400).json({ error: "unknown workflow" });
-      return;
-    }
-    const vaultPaths = Array.isArray(body.vaultPaths)
-      ? (body.vaultPaths as unknown[]).filter((p): p is string => typeof p === "string")
-      : [];
-    const heartbeat = await heartbeats.create({
-      name: body.name,
-      personaId: body.personaId,
-      conversationId: body.conversationId,
-      schedule: body.schedule,
-      task: typeof body.task === "string" ? body.task : "",
-      workflowId: typeof body.workflowId === "string" ? body.workflowId : undefined,
-      vaultPaths,
-      enabled: typeof body.enabled === "boolean" ? body.enabled : true,
-    });
-    res.status(201).json({ status: "created", heartbeat });
-  });
-
   app.patch("/heartbeats/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
     if (body.schedule !== undefined && !SCHEDULE_RE.test(body.schedule as string)) {
@@ -755,36 +844,6 @@ export function createPublicApp(deps: ServerDeps): Express {
   // ---- Workflows (Decisions/0009) ---------------------------------------
   app.get("/workflows", async (_req, res) => {
     res.status(200).json({ workflows: await workflows.list() });
-  });
-
-  app.post("/workflows", async (req, res) => {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.name !== "string" || body.name.length === 0) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
-    const parsed = parseSteps(body.steps);
-    if ("error" in parsed) {
-      res.status(400).json({ error: parsed.error });
-      return;
-    }
-    const existing = await workflows.list();
-    for (const step of parsed.steps) {
-      if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
-        res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
-        return;
-      }
-    }
-    // No cycle-check needed on create: nothing can already reference a
-    // workflow id that doesn't exist yet, so a brand-new workflow can
-    // never be part of a pre-existing cycle back to itself. Cycle-checking
-    // matters on update, once other workflows may already point at this id.
-    const workflow = await workflows.create({
-      name: body.name,
-      description: typeof body.description === "string" ? body.description : "",
-      steps: parsed.steps,
-    });
-    res.status(201).json({ status: "created", workflow });
   });
 
   app.get("/workflows/:id", async (req, res) => {
@@ -1061,6 +1120,12 @@ export function createInternalApp(deps: ServerDeps): Express {
 
   registerCreateConversationRoute(app, deps);
   registerUpdateConversationRoute(app, deps);
+  // Runner tools (create_persona/create_heartbeat/create_workflow, gated by
+  // the manageAgora persona capability) call these over the internal app —
+  // ADR 0007: agent-facing writes live here, not on the public app.
+  registerCreatePersonaRoute(app, deps);
+  registerCreateHeartbeatRoute(app, deps);
+  registerCreateWorkflowRoute(app, deps);
 
   // Runner-facing reads/writes for capabilities, heartbeats, audit.
   app.get("/personas/:id", async (req, res) => {

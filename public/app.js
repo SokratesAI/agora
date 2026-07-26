@@ -92,6 +92,7 @@ const newChatCapVaultWrite = $("new-chat-cap-vaultWrite");
 const newChatCapCodeExecution = $("new-chat-cap-codeExecution");
 const newChatCapKubectlRead = $("new-chat-cap-kubectlRead");
 const newChatCapGithubRead = $("new-chat-cap-githubRead");
+const newChatCapManageAgora = $("new-chat-cap-manageAgora");
 const newChatStatus = $("new-chat-status");
 const newChatCancel = $("new-chat-cancel");
 
@@ -130,18 +131,21 @@ const capVaultWrite = $("cap-vaultWrite");
 const capCodeExecution = $("cap-codeExecution");
 const capKubectlRead = $("cap-kubectlRead");
 const capGithubRead = $("cap-githubRead");
+const capManageAgora = $("cap-manageAgora");
 
 const heartbeatStudioScrim = $("heartbeat-studio-scrim");
 const heartbeatStudioList = $("heartbeat-studio-list");
 const heartbeatStudioAdd = $("heartbeat-studio-add");
 const heartbeatStudioClose = $("heartbeat-studio-close");
 
+const NEW_CHANNEL_SENTINEL = "__new__";
 const heartbeatFormScrim = $("heartbeat-form-scrim");
 const heartbeatForm = $("heartbeat-form");
 const heartbeatFormTitle = $("heartbeat-form-title");
 const heartbeatFormName = $("heartbeat-form-name");
 const heartbeatFormPersona = $("heartbeat-form-persona");
 const heartbeatFormConversation = $("heartbeat-form-conversation");
+const heartbeatFormNewConversationName = $("heartbeat-form-new-conversation-name");
 const heartbeatFormWorkflow = $("heartbeat-form-workflow");
 const heartbeatFormScheduleType = $("heartbeat-form-schedule-type");
 const heartbeatFormTime = $("heartbeat-form-time");
@@ -843,6 +847,7 @@ newChatModal.addEventListener("submit", async (event) => {
           codeExecution: newChatCapCodeExecution.checked,
           kubectlRead: newChatCapKubectlRead.checked,
           githubRead: newChatCapGithubRead.checked,
+          manageAgora: newChatCapManageAgora.checked,
         },
       };
   const { ok, data } = await api("POST", "/conversations", body);
@@ -859,11 +864,11 @@ newChatModal.addEventListener("submit", async (event) => {
 function personaMeta(persona) {
   const model = modelCatalogById.get(persona.model);
   const caps = persona.capabilities || {};
-  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead"]
+  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead", "manageAgora"]
     .filter((c) => caps[c])
     .map((c) => ({
       webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code",
-      kubectlRead: "k8s", githubRead: "gh",
+      kubectlRead: "k8s", githubRead: "gh", manageAgora: "manage",
     }[c]));
   return `${model ? model.label : persona.model}${enabled.length ? " · " + enabled.join(", ") : ""}`;
 }
@@ -963,7 +968,7 @@ function openPersonaForm(persona) {
   personaFormThinking.checked = Boolean(persona?.thinking);
   const caps = persona?.capabilities || {
     webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false,
-    kubectlRead: false, githubRead: false,
+    kubectlRead: false, githubRead: false, manageAgora: false,
   };
   capWebSearch.checked = Boolean(caps.webSearch);
   capVaultRead.checked = Boolean(caps.vaultRead);
@@ -971,6 +976,7 @@ function openPersonaForm(persona) {
   capCodeExecution.checked = Boolean(caps.codeExecution);
   capKubectlRead.checked = Boolean(caps.kubectlRead);
   capGithubRead.checked = Boolean(caps.githubRead);
+  capManageAgora.checked = Boolean(caps.manageAgora);
   personaFormMemory.value = persona?.sharedMemory || "";
   personaFormTemplate.checked = Boolean(persona?.isTemplate);
   personaFormPreviewText.value = "";
@@ -1036,6 +1042,7 @@ personaForm.addEventListener("submit", async (event) => {
       codeExecution: capCodeExecution.checked,
       kubectlRead: capKubectlRead.checked,
       githubRead: capGithubRead.checked,
+      manageAgora: capManageAgora.checked,
     },
     sharedMemory: personaFormMemory.value,
     isTemplate: personaFormTemplate.checked,
@@ -1141,6 +1148,9 @@ function renderHeartbeatRow(heartbeat) {
 
 heartbeatStudioAdd.addEventListener("click", () => openHeartbeatForm(null));
 
+heartbeatFormConversation.addEventListener("change", () => {
+  heartbeatFormNewConversationName.hidden = heartbeatFormConversation.value !== NEW_CHANNEL_SENTINEL;
+});
 heartbeatFormScheduleType.addEventListener("change", () => {
   const daily = heartbeatFormScheduleType.value === "daily";
   heartbeatFormTime.hidden = !daily;
@@ -1160,12 +1170,18 @@ function openHeartbeatForm(heartbeat) {
     heartbeatFormPersona.appendChild(option);
   }
   heartbeatFormConversation.innerHTML = "";
+  const newChannelOption = document.createElement("option");
+  newChannelOption.value = NEW_CHANNEL_SENTINEL;
+  newChannelOption.textContent = "+ New empty channel...";
+  heartbeatFormConversation.appendChild(newChannelOption);
   for (const conversation of allConversations) {
     const option = document.createElement("option");
     option.value = conversation.id;
     option.textContent = conversation.name + (conversation.archived ? " (archived)" : "");
     heartbeatFormConversation.appendChild(option);
   }
+  heartbeatFormNewConversationName.value = "";
+  heartbeatFormNewConversationName.hidden = true;
   heartbeatFormWorkflow.innerHTML = '<option value="">None — a single curator turn (default)</option>';
   for (const workflow of allWorkflows) {
     const option = document.createElement("option");
@@ -1210,6 +1226,11 @@ heartbeatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = heartbeatFormName.value.trim();
   if (!name) return;
+  const creatingNewChannel = heartbeatFormConversation.value === NEW_CHANNEL_SENTINEL;
+  if (creatingNewChannel && !heartbeatFormNewConversationName.value.trim()) {
+    heartbeatFormStatus.textContent = "New channel name is required.";
+    return;
+  }
   const schedule =
     heartbeatFormScheduleType.value === "daily"
       ? `daily@${heartbeatFormTime.value}`
@@ -1217,7 +1238,9 @@ heartbeatForm.addEventListener("submit", async (event) => {
   const body = {
     name,
     personaId: heartbeatFormPersona.value,
-    conversationId: heartbeatFormConversation.value,
+    ...(creatingNewChannel
+      ? { newConversationName: heartbeatFormNewConversationName.value.trim() }
+      : { conversationId: heartbeatFormConversation.value }),
     schedule,
     task: heartbeatFormTask.value,
     workflowId: heartbeatFormWorkflow.value || null,
