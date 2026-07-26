@@ -687,6 +687,7 @@
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-codeExecution" /> Code execution</label>
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-kubectlRead" /> Cluster access (read-only — no Secrets, ever)</label>
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-githubRead" /> GitHub access (read-only — cannot open PRs, push, or comment)</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-manageAgora" /> Manage Agora (create personas, conversations, heartbeats, workflows)</label>
         </div>
         <p class="modal-hint">Enforced by the runner per call — cluster/system access is never available at any setting. Writes are audit-logged (Activity). Only applies when creating a new persona here — picking an existing one above uses its own saved capabilities.</p>
       </div>
@@ -748,6 +749,7 @@
         <label class="checkbox-row"><input type="checkbox" id="cap-codeExecution" /> Code execution</label>
         <label class="checkbox-row"><input type="checkbox" id="cap-kubectlRead" /> Cluster access (read-only — no Secrets, ever)</label>
         <label class="checkbox-row"><input type="checkbox" id="cap-githubRead" /> GitHub access (read-only — cannot open PRs, push, or comment)</label>
+        <label class="checkbox-row"><input type="checkbox" id="cap-manageAgora" /> Manage Agora (create personas, conversations, heartbeats, workflows)</label>
       </div>
       <p class="modal-hint">Enforced by the runner per call — cluster/system access is never available at any setting. Writes are audit-logged (Activity).</p>
       <h3>Persistent memory (cross-conversation)</h3>
@@ -787,7 +789,8 @@
       <h3>Who speaks, and where</h3>
       <select id="heartbeat-form-persona"></select>
       <select id="heartbeat-form-conversation"></select>
-      <p class="modal-hint">The turn uses that conversation's history as context and replies into it (with a push).</p>
+      <input id="heartbeat-form-new-conversation-name" type="text" placeholder="New channel name (e.g. Marcus check-ins)" hidden />
+      <p class="modal-hint">The turn uses that conversation's history as context and replies into it (with a push). "+ New empty channel" creates a fresh conversation with the persona above as curator.</p>
       <h3>Run as workflow (optional)</h3>
       <select id="heartbeat-form-workflow">
         <option value="">None — a single curator turn (default)</option>

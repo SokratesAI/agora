@@ -17,6 +17,11 @@ export interface PersonaCapabilities {
   /** Read-only GitHub queries via the runner's github_read tool
    * (issues/PRs/runs/releases; GET-only for `gh api`). Issues.md #3. */
   githubRead: boolean;
+  /** Lets the persona create new personas/conversations/heartbeats/workflows
+   * via the runner's create_* tools (calling the internal app's create
+   * routes, ADR 0007) — platform-management, not just vault/cluster/web
+   * reads, so this defaults off unlike webSearch/vaultRead. */
+  manageAgora: boolean;
 }
 
 export interface Persona {
@@ -54,6 +59,7 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   codeExecution: false,
   kubectlRead: false,
   githubRead: false,
+  manageAgora: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as
