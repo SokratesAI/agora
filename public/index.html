@@ -231,6 +231,15 @@
       background: var(--bg-input); color: var(--text);
       padding: 0.5rem 0.7rem; font: inherit; font-size: 0.9rem; resize: vertical;
     }
+    /* Textareas are flex items inside .modal's column layout. A textarea's
+       overflow is auto (not visible), so its flexbox automatic min-height
+       resolves to 0 instead of its content size — flex-shrink then happily
+       crushes it down to ~1 line whenever the modal is short on vertical
+       space, no matter what `rows` says. min-height + flex-shrink:0 pin it
+       to a real multi-line size regardless of container pressure. */
+    .modal textarea {
+      min-height: 7.5em; flex-shrink: 0;
+    }
     .modal-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
     .modal-row select { flex: 1; min-width: 0; width: auto; }
     .modal-row input[type="time"], .modal-row input[type="number"] { width: auto; flex: none; }
