@@ -80,6 +80,8 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "kubectlRead",
     "githubRead",
     "manageAgora",
+    "githubWrite",
+    "githubMerge",
   ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }

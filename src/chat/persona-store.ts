@@ -22,6 +22,20 @@ export interface PersonaCapabilities {
    * routes, ADR 0007) — platform-management, not just vault/cluster/web
    * reads, so this defaults off unlike webSearch/vaultRead. */
   manageAgora: boolean;
+  /** Lets the persona open real GitHub PRs via the runner's create_pr tool
+   * (GitHub REST API directly — no git binary, no local clone — mirrors
+   * platform-workers/pr-drone's pattern). Uses the shared bot account, not
+   * a per-repo allowlist: any repo the bot token can reach. Separate from
+   * githubMerge on purpose — same separation of duties a human PR review
+   * gives: a persona can be allowed to propose changes without also being
+   * allowed to merge its own (or anyone else's) work. */
+  githubWrite: boolean;
+  /** Lets the persona merge an existing PR via the runner's merge_pr tool.
+   * The runner refuses unless every check-run on the PR's head commit is
+   * green — deliberately no "did this bot/persona open it" check, since
+   * every agent shares the same GitHub account so that distinction carries
+   * no signal. */
+  githubMerge: boolean;
 }
 
 export interface Persona {
@@ -60,6 +74,8 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   kubectlRead: false,
   githubRead: false,
   manageAgora: false,
+  githubWrite: false,
+  githubMerge: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as
