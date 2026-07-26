@@ -15,6 +15,11 @@ export interface Heartbeat {
   /** "daily@HH:MM" (Europe/Oslo) or "every@N[m|h]" — validated at the route. */
   schedule: string;
   task: string;
+  /** Decisions/0009 — when set, firing runs this Workflow's steps
+   * instead of a single curator turn. `personaId` is still required and
+   * still validated, but is unused by the runner in this mode —
+   * participants come from the bound conversation's own personas[]. */
+  workflowId: string | null;
   /** Vault doc paths; trailing "/" = folder prefix. Fetched fresh at
    * trigger time, injected capped (~24k chars, Architecture §4). */
   vaultPaths: string[];
@@ -34,6 +39,7 @@ export interface HeartbeatUpdate {
   conversationId?: string;
   schedule?: string;
   task?: string;
+  workflowId?: string | null;
   vaultPaths?: string[];
   enabled?: boolean;
   forceRun?: boolean;
@@ -83,6 +89,7 @@ export class HeartbeatStore {
     conversationId: string;
     schedule: string;
     task?: string;
+    workflowId?: string;
     vaultPaths?: string[];
     enabled?: boolean;
   }): Promise<Heartbeat> {
@@ -93,6 +100,7 @@ export class HeartbeatStore {
       conversationId: fields.conversationId,
       schedule: fields.schedule,
       task: fields.task ?? "",
+      workflowId: fields.workflowId ?? null,
       vaultPaths: fields.vaultPaths ?? [],
       enabled: fields.enabled ?? true,
       forceRun: false,
@@ -136,6 +144,7 @@ export class HeartbeatStore {
     try {
       const raw = await fs.readFile(filePath, "utf8");
       const heartbeat = JSON.parse(raw) as Heartbeat;
+      heartbeat.workflowId ??= null;
       heartbeat.vaultPaths ??= [];
       heartbeat.enabled ??= true;
       heartbeat.forceRun ??= false;

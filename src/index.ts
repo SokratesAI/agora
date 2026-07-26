@@ -10,6 +10,7 @@ import { MessageStore } from "./chat/message-store.js";
 import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
 import { HeartbeatStore } from "./chat/heartbeat-store.js";
+import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
 import { runStartupMigration } from "./migrate.js";
@@ -22,6 +23,7 @@ const messages = new MessageStore(config.dataDir);
 const conversations = new ConversationStore(config.dataDir);
 const personas = new PersonaStore(config.dataDir);
 const heartbeats = new HeartbeatStore(config.dataDir);
+const workflows = new WorkflowStore(config.dataDir);
 const audit = new AuditStore(config.dataDir);
 const attachments = new AttachmentStore(config.dataDir);
 
@@ -64,6 +66,7 @@ const deps: ServerDeps = {
   conversations,
   personas,
   heartbeats,
+  workflows,
   audit,
   attachments,
   webPush: webpush,
