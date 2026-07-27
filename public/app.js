@@ -93,6 +93,8 @@ const newChatCapCodeExecution = $("new-chat-cap-codeExecution");
 const newChatCapKubectlRead = $("new-chat-cap-kubectlRead");
 const newChatCapGithubRead = $("new-chat-cap-githubRead");
 const newChatCapManageAgora = $("new-chat-cap-manageAgora");
+const newChatCapGithubWrite = $("new-chat-cap-githubWrite");
+const newChatCapGithubMerge = $("new-chat-cap-githubMerge");
 const newChatStatus = $("new-chat-status");
 const newChatCancel = $("new-chat-cancel");
 
@@ -132,6 +134,8 @@ const capCodeExecution = $("cap-codeExecution");
 const capKubectlRead = $("cap-kubectlRead");
 const capGithubRead = $("cap-githubRead");
 const capManageAgora = $("cap-manageAgora");
+const capGithubWrite = $("cap-githubWrite");
+const capGithubMerge = $("cap-githubMerge");
 
 const heartbeatStudioScrim = $("heartbeat-studio-scrim");
 const heartbeatStudioList = $("heartbeat-studio-list");
@@ -848,6 +852,8 @@ newChatModal.addEventListener("submit", async (event) => {
           kubectlRead: newChatCapKubectlRead.checked,
           githubRead: newChatCapGithubRead.checked,
           manageAgora: newChatCapManageAgora.checked,
+          githubWrite: newChatCapGithubWrite.checked,
+          githubMerge: newChatCapGithubMerge.checked,
         },
       };
   const { ok, data } = await api("POST", "/conversations", body);
@@ -864,11 +870,15 @@ newChatModal.addEventListener("submit", async (event) => {
 function personaMeta(persona) {
   const model = modelCatalogById.get(persona.model);
   const caps = persona.capabilities || {};
-  const enabled = ["webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead", "manageAgora"]
+  const enabled = [
+    "webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead",
+    "manageAgora", "githubWrite", "githubMerge",
+  ]
     .filter((c) => caps[c])
     .map((c) => ({
       webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code",
       kubectlRead: "k8s", githubRead: "gh", manageAgora: "manage",
+      githubWrite: "pr", githubMerge: "merge",
     }[c]));
   return `${model ? model.label : persona.model}${enabled.length ? " · " + enabled.join(", ") : ""}`;
 }
@@ -968,7 +978,7 @@ function openPersonaForm(persona) {
   personaFormThinking.checked = Boolean(persona?.thinking);
   const caps = persona?.capabilities || {
     webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false,
-    kubectlRead: false, githubRead: false, manageAgora: false,
+    kubectlRead: false, githubRead: false, manageAgora: false, githubWrite: false, githubMerge: false,
   };
   capWebSearch.checked = Boolean(caps.webSearch);
   capVaultRead.checked = Boolean(caps.vaultRead);
@@ -977,6 +987,8 @@ function openPersonaForm(persona) {
   capKubectlRead.checked = Boolean(caps.kubectlRead);
   capGithubRead.checked = Boolean(caps.githubRead);
   capManageAgora.checked = Boolean(caps.manageAgora);
+  capGithubWrite.checked = Boolean(caps.githubWrite);
+  capGithubMerge.checked = Boolean(caps.githubMerge);
   personaFormMemory.value = persona?.sharedMemory || "";
   personaFormTemplate.checked = Boolean(persona?.isTemplate);
   personaFormPreviewText.value = "";
@@ -1043,6 +1055,8 @@ personaForm.addEventListener("submit", async (event) => {
       kubectlRead: capKubectlRead.checked,
       githubRead: capGithubRead.checked,
       manageAgora: capManageAgora.checked,
+      githubWrite: capGithubWrite.checked,
+      githubMerge: capGithubMerge.checked,
     },
     sharedMemory: personaFormMemory.value,
     isTemplate: personaFormTemplate.checked,
