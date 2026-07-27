@@ -10,6 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: sokratesai/agora
+  CONFIG_REPO: SokratesAI/agora-config
 
 jobs:
   test:
@@ -34,10 +35,6 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  # NOTE: deliberately no update-manifests job — see whatsapp-bridge's build.yaml
-  # for why (GH_BOT_TOKEN is too powerful for a service this small). Bump the
-  # image digest in platform-config's deployments/agora/agora.yaml by hand after
-  # a build (digest printed in the build-push job output below).
   build-push:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: test
@@ -72,5 +69,43 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      - name: Print digest for manual manifest bump
-        run: 'echo "image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"'
+
+  # Commits the new image digest to agora-config, which ArgoCD's SCM Provider
+  # generator auto-deploys — no platform-config PR, no manual step. Migrated
+  # 2026-07-27 from the old "print the digest, bump platform-config by hand"
+  # pattern: that existed because GH_BOT_TOKEN (broadly scoped) was too
+  # powerful for a service this small (see whatsapp-bridge's build.yaml for
+  # the same reasoning, still true there). The sokrates-ci-deployer GitHub
+  # App fixes that — this step's installation token is scoped to ONLY
+  # agora-config, never anything broader. ORG_APP_ID/ORG_APP_PRIVATE_KEY are
+  # repo-scoped Actions secrets on this repo (not org-level — GitHub gates
+  # those behind a paid plan for private repos). See the vault's
+  # Platform-Product-Catalog/_context.md for the full pattern.
+  update-manifest:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate installation token scoped to agora-config only
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ORG_APP_ID }}
+          private-key: ${{ secrets.ORG_APP_PRIVATE_KEY }}
+          owner: SokratesAI
+          repositories: agora-config
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CONFIG_REPO }}
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Update image digest in manifest.yaml
+        run: |
+          sed -i "s|image: .*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-push.outputs.digest }}|" manifest.yaml
+          git config user.name "sokratesai-repo-committer[bot]"
+          git config user.email "sokratesai-repo-committer[bot]@users.noreply.github.com"
+          git add manifest.yaml
+          if git diff --staged --quiet; then
+            echo "no manifest change, skipping commit"
+          else
+            git commit -m "Update image to ${{ needs.build-push.outputs.digest }}"
+            git push
+          fi
