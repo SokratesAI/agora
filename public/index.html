@@ -160,7 +160,13 @@
       font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
       color: var(--text-dimmer); padding: 0.6rem 0.5rem 0.2rem;
     }
-    #drawer-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.1rem; }
+    /* drawer-list-wrap is drawer's actual scrollable region -- drawer-list
+       itself is a plain child of it, not of #drawer, so flex/overflow rules
+       on drawer-list alone were inert (no flex-parent to size against). That
+       let the drawer grow to fit every conversation with nothing to scroll,
+       pushing drawer-footer's theme toggle off-screen unreachable. */
+    #drawer-list-wrap { flex: 1; min-height: 0; overflow-y: auto; }
+    #drawer-list { display: flex; flex-direction: column; gap: 0.1rem; }
     .drawer-row {
       display: flex; align-items: center; gap: 0.4rem;
       border-radius: 0.6rem; padding: 0.55rem 0.5rem; cursor: pointer;
@@ -177,7 +183,10 @@
       font-size: 1rem; padding: 0.2rem 0.4rem; cursor: pointer; border-radius: 0.4rem;
     }
     .drawer-row-more:hover { background: var(--border); }
-    #drawer-search-results { display: flex; flex-direction: column; gap: 0.1rem; }
+    /* Same missing-scroll bug as drawer-list-wrap above -- mutually exclusive
+       with it (app.js toggles `hidden` on whichever isn't active), so this
+       is the drawer's scrollable region whenever a search is active. */
+    #drawer-search-results { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.1rem; }
     .search-hit { display: flex; flex-direction: column; border-radius: 0.6rem; padding: 0.5rem; cursor: pointer; font-size: 0.8rem; }
     .search-hit:hover { background: var(--bg-input); }
     .search-hit .hit-name { font-weight: 600; font-size: 0.72rem; color: var(--text-dim); }
