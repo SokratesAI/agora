@@ -36,6 +36,15 @@ export interface PersonaCapabilities {
    * every agent shares the same GitHub account so that distinction carries
    * no signal. */
   githubMerge: boolean;
+  /** Lets the persona run arbitrary shell commands in the runner pod via
+   * its terminal_exec tool (bash -lc, unrestricted — no verb/flag allowlist
+   * like kubectlRead/githubRead). Issues.md #1: the runner's purpose-built
+   * tools (vault/kubectl/github) have bugs and gaps of their own; this lets
+   * a persona skip them and fix things directly instead of waiting on a
+   * human to ship a runner change. Same pod as every other capability here,
+   * so it carries the union of this pod's kubectl RBAC and GitHub bot token
+   * — the highest blast-radius capability in this list. Defaults off. */
+  terminalExec: boolean;
 }
 
 export interface Persona {
@@ -76,6 +85,7 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   manageAgora: false,
   githubWrite: false,
   githubMerge: false,
+  terminalExec: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as
