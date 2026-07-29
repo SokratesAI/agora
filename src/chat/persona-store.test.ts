@@ -71,6 +71,20 @@ describe("PersonaStore", () => {
     expect(updated?.capabilities.githubRead).toBe(true);
   });
 
+  it("defaults terminalExec to off and toggles it independently of other capabilities", async () => {
+    const store = await makeStore();
+    const persona = await store.create({ name: "Shell", model: "anthropic:claude-sonnet-5" });
+    expect(persona.capabilities.terminalExec).toBe(false);
+
+    const granted = await store.update(persona.id, { capabilities: { terminalExec: true } });
+    expect(granted?.capabilities.terminalExec).toBe(true);
+    expect(granted?.capabilities.githubWrite).toBe(false);
+    expect(granted?.capabilities.githubMerge).toBe(false);
+
+    const revoked = await store.update(persona.id, { capabilities: { terminalExec: false } });
+    expect(revoked?.capabilities.terminalExec).toBe(false);
+  });
+
   it("persists updates and bumps updatedAt", async () => {
     const store = await makeStore();
     const persona = await store.create({ name: "A", model: "anthropic:claude-sonnet-5" });

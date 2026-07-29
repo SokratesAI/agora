@@ -82,6 +82,7 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "manageAgora",
     "githubWrite",
     "githubMerge",
+    "terminalExec",
   ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }

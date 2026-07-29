@@ -171,6 +171,22 @@ describe("agora public app", () => {
     expect(res.body.persona.capabilities.githubRead).toBe(true);
   });
 
+  it("POST /personas accepts the terminalExec capability flag, defaulted off", async () => {
+    const off = await request(app).post("/personas").send({
+      name: "NoShell",
+      model: "anthropic:claude-sonnet-5",
+    });
+    expect(off.body.persona.capabilities.terminalExec).toBe(false);
+
+    const on = await request(app).post("/personas").send({
+      name: "Shell",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { terminalExec: true },
+    });
+    expect(on.status).toBe(201);
+    expect(on.body.persona.capabilities.terminalExec).toBe(true);
+  });
+
   it("DELETE /personas/:id refuses while referenced by a conversation or heartbeat", async () => {
     const created = await request(app)
       .post("/personas")
