@@ -112,7 +112,17 @@ function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
       return { error: "step.filepath is required when scoped_write is in toolWhitelist" };
     }
     const workflowRef = typeof s.workflowRef === "string" && s.workflowRef.length > 0 ? s.workflowRef : undefined;
-    steps.push({ prompt: s.prompt, loopCount: s.loopCount, toolWhitelist, ...(filepath ? { filepath } : {}), ...(workflowRef ? { workflowRef } : {}) });
+    const personaIds = Array.isArray(s.personaIds)
+      ? (s.personaIds as unknown[]).filter((p): p is string => typeof p === "string" && p.length > 0)
+      : undefined;
+    steps.push({
+      prompt: s.prompt,
+      loopCount: s.loopCount,
+      toolWhitelist,
+      ...(filepath ? { filepath } : {}),
+      ...(workflowRef ? { workflowRef } : {}),
+      ...(personaIds && personaIds.length > 0 ? { personaIds } : {}),
+    });
   }
   return { steps };
 }
@@ -364,6 +374,12 @@ function registerCreateWorkflowRoute(app: Express, deps: ServerDeps): void {
       if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
         res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
         return;
+      }
+      for (const personaId of step.personaIds ?? []) {
+        if (!(await deps.personas.get(personaId))) {
+          res.status(400).json({ error: `unknown persona in step.personaIds: ${personaId}` });
+          return;
+        }
       }
     }
     // No cycle-check needed on create: nothing can already reference a
@@ -874,6 +890,12 @@ export function createPublicApp(deps: ServerDeps): Express {
         if (step.workflowRef && !existing.some((w) => w.id === step.workflowRef)) {
           res.status(400).json({ error: `unknown workflowRef: ${step.workflowRef}` });
           return;
+        }
+        for (const personaId of step.personaIds ?? []) {
+          if (!(await personas.get(personaId))) {
+            res.status(400).json({ error: `unknown persona in step.personaIds: ${personaId}` });
+            return;
+          }
         }
       }
       if (wouldCreateCycle(existing, req.params.id, parsed.steps)) {
