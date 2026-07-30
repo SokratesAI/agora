@@ -688,6 +688,35 @@ describe("agora public app", () => {
     expect(cyclic.body.error).toMatch(/cycle/);
   });
 
+  it("POST /workflows accepts step.personaIds, validated against real personas", async () => {
+    const { persona } = await createHeartbeatFixtures();
+
+    const rejected = await request(app)
+      .post("/workflows")
+      .send({
+        name: "Bad",
+        steps: [{ prompt: "x", loopCount: 1, toolWhitelist: [], personaIds: ["ghost"] }],
+      });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/personaIds/);
+
+    const accepted = await request(app)
+      .post("/workflows")
+      .send({
+        name: "Good",
+        steps: [{ prompt: "x", loopCount: 1, toolWhitelist: [], personaIds: [persona.id] }],
+      });
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.workflow.steps[0].personaIds).toEqual([persona.id]);
+
+    // PATCH validates the same way.
+    const patched = await request(app)
+      .patch(`/workflows/${accepted.body.workflow.id}`)
+      .send({ steps: [{ prompt: "x", loopCount: 1, toolWhitelist: [], personaIds: ["ghost"] }] });
+    expect(patched.status).toBe(400);
+    expect(patched.body.error).toMatch(/personaIds/);
+  });
+
   it("DELETE /workflows/:id refuses while a heartbeat references it", async () => {
     const { persona, conversation } = await createHeartbeatFixtures();
     const workflow = await request(app).post("/workflows").send({ name: "Bound", steps: [] });

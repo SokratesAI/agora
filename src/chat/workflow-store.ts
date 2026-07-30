@@ -9,6 +9,19 @@ export interface Step {
   /** Additive — layered onto each participant's own personality for the
    * duration of this step only, never a replacement. */
   prompt: string;
+  /** This step's own participants, round-robin among just this list —
+   * NOT the conversation's full personas[] (2026-07-30 fix). Empty/unset
+   * falls back to the conversation's full list, so pre-existing workflows
+   * saved before this field existed keep behaving exactly as before.
+   * Added because forcing every persona in a conversation through every
+   * step (even ones a persona has no capability-relevant role in) is the
+   * wrong model for a pipeline where each stage has a known, designated
+   * owner at authoring time — round-robin across an undifferentiated
+   * list is right for genuine multi-agent discussion, wrong for "step 1
+   * is always Coder, step 2 is always Reviewer." Every persona listed
+   * must already be one of the conversation's own personas[] — this
+   * narrows who acts each step, it doesn't add new participants. */
+  personaIds?: string[];
   /** Fixed at authoring time, no runtime override (Decisions/0009 —
    * a multi-step workflow makes "which step does a bare int override"
    * ambiguous, so editing the step is the answer instead). */
