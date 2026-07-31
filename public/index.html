@@ -411,6 +411,14 @@
     .msg-activity-stats .stat-del { color: var(--diff-del-text); }
     .msg-activity-chevron { flex: none; color: var(--text-dimmer); }
 
+    /* Extended-thinking chunk (2026-07-31) -- a persona's own thought
+       process, visually distinct from a real reply (dimmed, italic,
+       narrower) so it reads as "scratch space", not the answer. */
+    .msg-thinking-meta { color: var(--text-dimmer); }
+    .msg-thinking { color: var(--text-dimmer); font-style: italic; font-size: 0.88rem; }
+    .msg-thinking p { margin: 0 0 0.4rem; }
+    .msg-thinking p:last-child { margin-bottom: 0; }
+
     .msg-attachments { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
     .msg-attachment-image { max-width: 100%; max-height: 16rem; border-radius: 0.7rem; display: block; }
     .msg-attachment-file {

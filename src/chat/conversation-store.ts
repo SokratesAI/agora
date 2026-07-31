@@ -55,6 +55,13 @@ export interface Message {
     before?: string;
     after?: string;
   };
+  /** Extended-thinking chunk (2026-07-31) -- a persona's own thought-summary
+   * text (Anthropic's native thinking blocks; Gemini's when includeThoughts
+   * is on), not something anyone "said". Excluded from every LLM context
+   * the runner builds and from turn-taking, same as `system`/`activity` --
+   * rendered distinctly (dimmed/collapsible) rather than as a normal reply
+   * bubble. */
+  thinking?: boolean;
 }
 
 /** Exactly one "curator" per conversation; listeners reply only when
@@ -349,6 +356,7 @@ export class ConversationStore {
     attachments?: MessageAttachment[],
     system?: boolean,
     activity?: Message["activity"],
+    thinking?: boolean,
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -359,6 +367,7 @@ export class ConversationStore {
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(system ? { system: true } : {}),
       ...(activity ? { activity } : {}),
+      ...(thinking ? { thinking: true } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);

@@ -1808,6 +1808,24 @@ function renderActivityChip(message) {
   return chip;
 }
 
+// Extended-thinking chunk (2026-07-31) -- a persona's own thought process,
+// not the answer. No long-press menu (nothing to edit/regenerate/forget
+// separately from the reply it led to), dimmed/italic so it reads as
+// scratch space rather than competing with the real reply that follows.
+function renderThinkingBlock(message) {
+  const block = document.createElement("div");
+  block.className = "msg-block theirs";
+  const meta = document.createElement("div");
+  meta.className = "msg-meta msg-thinking-meta";
+  meta.textContent = `💭 ${message.sender} · ${formatTime(message.ts)}`;
+  block.appendChild(meta);
+  const body = document.createElement("div");
+  body.className = "msg-plain msg-thinking";
+  body.innerHTML = renderMarkdown(message.text);
+  block.appendChild(body);
+  return block;
+}
+
 function renderMessageBlock(message, isLast) {
   // Inline Activity chip (2026-07-24) -- a tool-use event, not something
   // anyone "said". No sender/timestamp meta line, no bubble, no long-press
@@ -1815,6 +1833,9 @@ function renderMessageBlock(message, isLast) {
   // Activity tab, reusing its diff modal via activityEntryFromMessage.
   if (message.activity) {
     return renderActivityChip(message);
+  }
+  if (message.thinking) {
+    return renderThinkingBlock(message);
   }
 
   const mine = message.sender === MY_SENDER;

@@ -1118,4 +1118,24 @@ describe("agora internal app", () => {
     expect(res.status).toBe(200);
     expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
   });
+
+  // ---------------------------------------------------------------------
+  // 2026-07-31: bring back visible "thinking" -- a persona's extended-
+  // thinking chunk, recorded like `system`/`activity` for exclusion from
+  // LLM context/turn-taking (runner-side), rendered distinctly (frontend).
+  // ---------------------------------------------------------------------
+
+  it("POST /conversations/:id/notify records thinking:true when passed, omits it otherwise", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Test", "");
+    const thought = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "pondering...", sender: "Gemini", thinking: true });
+    expect(thought.body.message.thinking).toBe(true);
+
+    const normal = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "a real reply", sender: "Gemini" });
+    expect(normal.body.message.thinking).toBeUndefined();
+  });
 });
