@@ -223,6 +223,19 @@ describe("ConversationStore", () => {
     expect(normalMsg?.system).toBeUndefined();
   });
 
+  it("stores thinking:true on appendMessage, and omits it entirely when not passed", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Test", "persona a");
+    const thinkingMsg = await store.appendMessage(
+      conversation.id, "Gemini", "pondering...", undefined, undefined, undefined, undefined, true,
+    );
+    expect(thinkingMsg?.thinking).toBe(true);
+
+    const normalMsg = await store.appendMessage(conversation.id, "Edvard", "hi");
+    expect(normalMsg?.thinking).toBeUndefined();
+  });
+
   it("deletes a message from a conversation", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);

@@ -1242,8 +1242,8 @@ export function createInternalApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/notify", async (req, res) => {
-    const { text, sender, system, push } = req.body as {
-      text?: unknown; sender?: unknown; system?: unknown; push?: unknown;
+    const { text, sender, system, push, thinking } = req.body as {
+      text?: unknown; sender?: unknown; system?: unknown; push?: unknown; thinking?: unknown;
     };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
@@ -1260,7 +1260,7 @@ export function createInternalApp(deps: ServerDeps): Express {
     const speaker =
       typeof sender === "string" && sender.length > 0 ? sender : conversation.name;
     const message = await conversations.appendMessage(
-      conversation.id, speaker, text, undefined, undefined, system === true,
+      conversation.id, speaker, text, undefined, undefined, system === true, undefined, thinking === true,
     );
 
     // Live streaming (2026-07-24): a single persona turn now lands as
