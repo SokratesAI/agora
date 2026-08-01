@@ -774,6 +774,10 @@
         <input type="checkbox" id="persona-form-claude-cli-restricted" />
         Restrict tools (blocks the full known Claude Code tool set — unrestricted is the default, same as an interactive session)
       </label>
+      <label class="checkbox-row" id="persona-form-claude-cli-stateless-row">
+        <input type="checkbox" id="persona-form-claude-cli-stateless" />
+        Stateless (no CLI session memory — every turn starts fresh with no --resume; off by default, chat personas usually want continuity)
+      </label>
       <h3>Capabilities</h3>
       <div class="capability-grid">
         <label class="checkbox-row"><input type="checkbox" id="cap-webSearch" /> Web search</label>

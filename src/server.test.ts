@@ -176,6 +176,22 @@ describe("agora public app", () => {
     expect(patched.body.persona.claudeCliRestricted).toBe(false);
   });
 
+  it("POST /personas accepts claudeCliStateless, PATCH updates it", async () => {
+    const created = await request(app).post("/personas").send({
+      name: "CliBot2",
+      model: "claude-cli:claude-haiku-4-5-20251001",
+      claudeCliStateless: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.persona.claudeCliStateless).toBe(true);
+
+    const patched = await request(app)
+      .patch(`/personas/${created.body.persona.id}`)
+      .send({ claudeCliStateless: false });
+    expect(patched.status).toBe(200);
+    expect(patched.body.persona.claudeCliStateless).toBe(false);
+  });
+
   it("POST /personas accepts kubectlRead/githubRead capability flags", async () => {
     const res = await request(app).post("/personas").send({
       name: "Ops",
