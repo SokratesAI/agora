@@ -54,6 +54,13 @@ export interface Persona {
   /** "<provider>:<model id>" */
   model: string;
   thinking: boolean;
+  /** claude-cli personas only (2026-08-01): requests the bridge's full
+   * known-tool denylist for this persona's calls -- unrestricted (false)
+   * is the default, same as an interactive Claude Code session; Agora's
+   * usual capability checkboxes don't apply to this provider at all (its
+   * tools, if any, live entirely inside the CLI's own session). Ignored
+   * by every other provider. */
+  claudeCliRestricted?: boolean;
   capabilities: PersonaCapabilities;
   /** Cross-conversation memory (Architecture §2) — editable in the Studio
    * and writable by the persona itself via the runner's save_memory tool. */
@@ -70,6 +77,7 @@ export interface PersonaUpdate {
   personality?: string;
   model?: string;
   thinking?: boolean;
+  claudeCliRestricted?: boolean;
   capabilities?: Partial<PersonaCapabilities>;
   sharedMemory?: string;
   isTemplate?: boolean;
@@ -134,6 +142,7 @@ export class PersonaStore {
     personality?: string;
     model: string;
     thinking?: boolean;
+    claudeCliRestricted?: boolean;
     capabilities?: Partial<PersonaCapabilities>;
     sharedMemory?: string;
     isTemplate?: boolean;
@@ -145,6 +154,7 @@ export class PersonaStore {
       personality: fields.personality ?? "",
       model: fields.model,
       thinking: fields.thinking ?? false,
+      ...(fields.claudeCliRestricted !== undefined ? { claudeCliRestricted: fields.claudeCliRestricted } : {}),
       capabilities: { ...DEFAULT_CAPABILITIES, ...fields.capabilities },
       sharedMemory: fields.sharedMemory ?? "",
       isTemplate: fields.isTemplate ?? false,
@@ -179,6 +189,7 @@ export class PersonaStore {
       personality: source.personality,
       model: source.model,
       thinking: source.thinking,
+      claudeCliRestricted: source.claudeCliRestricted,
       capabilities: { ...source.capabilities },
       sharedMemory: source.sharedMemory,
       isTemplate: false,
