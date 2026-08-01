@@ -111,6 +111,30 @@ describe("PersonaStore", () => {
     expect(clone?.id).not.toBe(template.id);
   });
 
+  it("omits claudeCliRestricted by default and persists it when set", async () => {
+    const store = await makeStore();
+    const persona = await store.create({ name: "A", model: "claude-cli:claude-haiku-4-5-20251001" });
+    expect(persona.claudeCliRestricted).toBeUndefined();
+
+    const created = await store.create({
+      name: "B", model: "claude-cli:claude-haiku-4-5-20251001", claudeCliRestricted: true,
+    });
+    expect(created.claudeCliRestricted).toBe(true);
+
+    await store.update(persona.id, { claudeCliRestricted: true });
+    const reloaded = await store.get(persona.id);
+    expect(reloaded?.claudeCliRestricted).toBe(true);
+  });
+
+  it("carries claudeCliRestricted through clone", async () => {
+    const store = await makeStore();
+    const source = await store.create({
+      name: "A", model: "claude-cli:claude-haiku-4-5-20251001", claudeCliRestricted: true,
+    });
+    const clone = await store.clone(source.id);
+    expect(clone?.claudeCliRestricted).toBe(true);
+  });
+
   it("deletes and reports missing ids", async () => {
     const store = await makeStore();
     const persona = await store.create({ name: "A", model: "anthropic:claude-sonnet-5" });

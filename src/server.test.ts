@@ -160,6 +160,22 @@ describe("agora public app", () => {
     expect(res.body.persona.sharedMemory).toBe("notes");
   });
 
+  it("POST /personas accepts claudeCliRestricted, PATCH updates it", async () => {
+    const created = await request(app).post("/personas").send({
+      name: "CliBot",
+      model: "claude-cli:claude-haiku-4-5-20251001",
+      claudeCliRestricted: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.persona.claudeCliRestricted).toBe(true);
+
+    const patched = await request(app)
+      .patch(`/personas/${created.body.persona.id}`)
+      .send({ claudeCliRestricted: false });
+    expect(patched.status).toBe(200);
+    expect(patched.body.persona.claudeCliRestricted).toBe(false);
+  });
+
   it("POST /personas accepts kubectlRead/githubRead capability flags", async () => {
     const res = await request(app).post("/personas").send({
       name: "Ops",

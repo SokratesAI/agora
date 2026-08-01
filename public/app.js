@@ -121,6 +121,8 @@ const personaFormModel = $("persona-form-model");
 const personaFormBadge = $("persona-form-badge");
 const personaFormThinkingRow = $("persona-form-thinking-row");
 const personaFormThinking = $("persona-form-thinking");
+const personaFormClaudeCliRestrictedRow = $("persona-form-claude-cli-restricted-row");
+const personaFormClaudeCliRestricted = $("persona-form-claude-cli-restricted");
 const personaFormMemory = $("persona-form-memory");
 const personaFormTemplate = $("persona-form-template");
 const personaFormPreviewText = $("persona-form-preview-text");
@@ -354,6 +356,7 @@ async function loadModelCatalog() {
   updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
   updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
   updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+  updateClaudeCliRestrictedVisibility(personaFormModel, personaFormClaudeCliRestrictedRow, personaFormClaudeCliRestricted);
 }
 
 function populateModelSelect(select) {
@@ -399,12 +402,24 @@ function updateStickyFallbackVisibility(select, row, checkbox) {
   row.hidden = !isGemini;
   if (!isGemini) checkbox.checked = false;
 }
+// claudeCliRestricted only means anything for a claude-cli persona -- same
+// hide-and-force-off pattern. Persona-level only (not per-conversation
+// model overrides), since it lives on the Persona record itself.
+function updateClaudeCliRestrictedVisibility(select, row, checkbox) {
+  const model = modelCatalogById.get(select.value);
+  const isClaudeCli = Boolean(model && model.provider === "claude-cli");
+  row.hidden = !isClaudeCli;
+  if (!isClaudeCli) checkbox.checked = false;
+}
 newChatModel.addEventListener("change", () => updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge));
 editModel.addEventListener("change", () => {
   updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
   updateStickyFallbackVisibility(editModel, editStickyFallbackRow, editStickyFallback);
 });
-personaFormModel.addEventListener("change", () => updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge));
+personaFormModel.addEventListener("change", () => {
+  updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+  updateClaudeCliRestrictedVisibility(personaFormModel, personaFormClaudeCliRestrictedRow, personaFormClaudeCliRestricted);
+});
 
 // --- Drawer ------------------------------------------------------------------
 function openDrawer() {
@@ -979,6 +994,7 @@ function openPersonaForm(persona) {
   personaFormPersonality.value = persona?.personality || "";
   if (persona?.model && modelCatalogById.has(persona.model)) personaFormModel.value = persona.model;
   personaFormThinking.checked = Boolean(persona?.thinking);
+  personaFormClaudeCliRestricted.checked = Boolean(persona?.claudeCliRestricted);
   const caps = persona?.capabilities || {
     webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false,
     kubectlRead: false, githubRead: false, manageAgora: false, githubWrite: false, githubMerge: false,
@@ -1003,8 +1019,10 @@ function openPersonaForm(persona) {
     personaFormPersonality.value = template.personality;
     personaFormModel.value = template.model;
     updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+    updateClaudeCliRestrictedVisibility(personaFormModel, personaFormClaudeCliRestrictedRow, personaFormClaudeCliRestricted);
   });
   updateThinkingVisibility(personaFormModel, personaFormThinkingRow, personaFormThinking, personaFormBadge);
+  updateClaudeCliRestrictedVisibility(personaFormModel, personaFormClaudeCliRestrictedRow, personaFormClaudeCliRestricted);
   personaFormScrim.hidden = false;
 }
 
@@ -1024,6 +1042,7 @@ personaFormPreviewBtn.addEventListener("click", async () => {
     personality: personaFormPersonality.value,
     model: personaFormModel.value,
     thinking: personaFormThinkingRow.hidden ? false : personaFormThinking.checked,
+    claudeCliRestricted: personaFormClaudeCliRestrictedRow.hidden ? false : personaFormClaudeCliRestricted.checked,
     text,
   });
   personaFormStatus.textContent = ok ? "" : status === 503 ? "Runner not configured." : "Preview failed.";
@@ -1052,6 +1071,7 @@ personaForm.addEventListener("submit", async (event) => {
     personality: personaFormPersonality.value,
     model: personaFormModel.value,
     thinking: personaFormThinkingRow.hidden ? false : personaFormThinking.checked,
+    claudeCliRestricted: personaFormClaudeCliRestrictedRow.hidden ? false : personaFormClaudeCliRestricted.checked,
     capabilities: {
       webSearch: capWebSearch.checked,
       vaultRead: capVaultRead.checked,
