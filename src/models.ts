@@ -2,7 +2,7 @@ export interface ModelOption {
   /** "<provider>:<model id>" — what a conversation's `model` field stores. */
   id: string;
   label: string;
-  provider: "anthropic" | "gemini";
+  provider: "anthropic" | "gemini" | "claude-cli";
   /** Whether the thinking toggle does anything for this model. Haiku
    * doesn't support thinking at all; Fable 5's thinking is always on and
    * can't be turned off — both are `false` here for the same UI reason
@@ -101,5 +101,32 @@ export const MODEL_CATALOG: ModelOption[] = [
     label: "Gemini 3.6 Flash",
     provider: "gemini",
     supportsThinking: true,
+  },
+  // claude-cli (2026-08-01): same underlying models as the anthropic:
+  // entries above, reached via a persistent Claude Code CLI session
+  // (agora-claude-bridge) instead of the raw Messages API -- subscription-
+  // authenticated once real credentials are wired in, not billed per
+  // token. Chat mode only for now (no tool loop) -- see
+  // agora-persona-runner's providers/claude_cli.py.
+  {
+    id: "claude-cli:claude-haiku-4-5-20251001",
+    label: "Claude Haiku 4.5 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: false,
+    contextWindow: "200K",
+  },
+  {
+    id: "claude-cli:claude-sonnet-5",
+    label: "Claude Sonnet 5 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: true,
+    contextWindow: "1M",
+  },
+  {
+    id: "claude-cli:claude-opus-4-8",
+    label: "Claude Opus 4.8 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: true,
+    contextWindow: "1M",
   },
 ];
