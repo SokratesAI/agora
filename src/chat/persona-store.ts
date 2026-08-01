@@ -61,6 +61,15 @@ export interface Persona {
    * tools, if any, live entirely inside the CLI's own session). Ignored
    * by every other provider. */
   claudeCliRestricted?: boolean;
+  /** claude-cli personas only (2026-08-01): when true, the bridge never
+   * reads or writes this conversation's stored CLI session -- every turn
+   * gets the full system+prompt and starts fresh, with no --resume. Built
+   * for the Evolve workflow's steps, which should only see their own
+   * prompt's context, not an ever-accumulating session across cycles
+   * (cross-cycle memory belongs in the vault journal, not CLI replay).
+   * Off by default -- an ordinary chat persona wants turn-to-turn
+   * continuity, the opposite of this. Ignored by every other provider. */
+  claudeCliStateless?: boolean;
   capabilities: PersonaCapabilities;
   /** Cross-conversation memory (Architecture §2) — editable in the Studio
    * and writable by the persona itself via the runner's save_memory tool. */
@@ -78,6 +87,7 @@ export interface PersonaUpdate {
   model?: string;
   thinking?: boolean;
   claudeCliRestricted?: boolean;
+  claudeCliStateless?: boolean;
   capabilities?: Partial<PersonaCapabilities>;
   sharedMemory?: string;
   isTemplate?: boolean;
@@ -143,6 +153,7 @@ export class PersonaStore {
     model: string;
     thinking?: boolean;
     claudeCliRestricted?: boolean;
+    claudeCliStateless?: boolean;
     capabilities?: Partial<PersonaCapabilities>;
     sharedMemory?: string;
     isTemplate?: boolean;
@@ -155,6 +166,7 @@ export class PersonaStore {
       model: fields.model,
       thinking: fields.thinking ?? false,
       ...(fields.claudeCliRestricted !== undefined ? { claudeCliRestricted: fields.claudeCliRestricted } : {}),
+      ...(fields.claudeCliStateless !== undefined ? { claudeCliStateless: fields.claudeCliStateless } : {}),
       capabilities: { ...DEFAULT_CAPABILITIES, ...fields.capabilities },
       sharedMemory: fields.sharedMemory ?? "",
       isTemplate: fields.isTemplate ?? false,
@@ -190,6 +202,7 @@ export class PersonaStore {
       model: source.model,
       thinking: source.thinking,
       claudeCliRestricted: source.claudeCliRestricted,
+      claudeCliStateless: source.claudeCliStateless,
       capabilities: { ...source.capabilities },
       sharedMemory: source.sharedMemory,
       isTemplate: false,
