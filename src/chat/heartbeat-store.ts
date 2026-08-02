@@ -30,6 +30,20 @@ export interface Heartbeat {
   /** One status line for the Studio list ("replied 214 chars", "failed:
    * ..."), written back by the runner. */
   lastResult: string | null;
+  /** Workflow-mode only (2026-08-02): when true, the runner creates a
+   * fresh conversation for every cycle instead of reusing `conversationId`
+   * forever -- carries the same persona list forward, points this
+   * heartbeat at the new one, and archives older cycle-conversations
+   * beyond `conversationRetention`. Keeps the (verbose, tool-call-heavy)
+   * per-cycle transcript bounded and human-browsable, same reasoning as
+   * why the evolution journal is a curated summary and not the raw
+   * transcript. Off by default -- an ordinary heartbeat wants its one
+   * conversation to keep accumulating, same as before. */
+  rotateConversationEachRun?: boolean;
+  /** How many of the most recent rotated conversations to keep active;
+   * older ones get archived (not deleted). Only meaningful when
+   * `rotateConversationEachRun` is true; defaults to 5 if unset. */
+  conversationRetention?: number;
   createdAt: string;
 }
 
@@ -45,6 +59,8 @@ export interface HeartbeatUpdate {
   forceRun?: boolean;
   lastRunAt?: string | null;
   lastResult?: string | null;
+  rotateConversationEachRun?: boolean;
+  conversationRetention?: number;
 }
 
 export const SCHEDULE_RE = /^(daily@([01]?\d|2[0-3]):[0-5]\d|every@\d+[mh])$/;
@@ -92,6 +108,8 @@ export class HeartbeatStore {
     workflowId?: string;
     vaultPaths?: string[];
     enabled?: boolean;
+    rotateConversationEachRun?: boolean;
+    conversationRetention?: number;
   }): Promise<Heartbeat> {
     const heartbeat: Heartbeat = {
       id: randomUUID(),
@@ -106,6 +124,12 @@ export class HeartbeatStore {
       forceRun: false,
       lastRunAt: null,
       lastResult: null,
+      ...(fields.rotateConversationEachRun !== undefined
+        ? { rotateConversationEachRun: fields.rotateConversationEachRun }
+        : {}),
+      ...(fields.conversationRetention !== undefined
+        ? { conversationRetention: fields.conversationRetention }
+        : {}),
       createdAt: new Date().toISOString(),
     };
     await this.enqueue(() => this.writeFile(heartbeat));

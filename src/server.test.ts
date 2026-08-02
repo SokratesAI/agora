@@ -790,6 +790,28 @@ describe("agora public app", () => {
     expect(res.body.heartbeat.workflowId).toBe(workflow.body.workflow.id);
   });
 
+  it("POST /heartbeats accepts rotateConversationEachRun/conversationRetention, PATCH updates them", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "rotator",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@6h",
+      rotateConversationEachRun: true,
+      conversationRetention: 3,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.heartbeat.rotateConversationEachRun).toBe(true);
+    expect(created.body.heartbeat.conversationRetention).toBe(3);
+
+    const patched = await request(app)
+      .patch(`/heartbeats/${created.body.heartbeat.id}`)
+      .send({ rotateConversationEachRun: false, conversationRetention: 5 });
+    expect(patched.status).toBe(200);
+    expect(patched.body.heartbeat.rotateConversationEachRun).toBe(false);
+    expect(patched.body.heartbeat.conversationRetention).toBe(5);
+  });
+
   // ---- Search / audit ---------------------------------------------------
   it("GET /search covers conversations without double-reporting Main", async () => {
     await request(app).post("/reply").send({ text: "needle in main" });
@@ -994,6 +1016,32 @@ describe("agora internal app", () => {
     const reloaded = await deps.heartbeats.get(heartbeat.id);
     expect(reloaded?.forceRun).toBe(false);
     expect(reloaded?.lastResult).toBe("replied 88 chars");
+  });
+
+  it("PATCH /heartbeats/:id (internal) lets the engine rotate conversationId", async () => {
+    const oldConv = await deps.conversations.create("Old", "", "anthropic:claude-haiku-4-5-20251001", false, []);
+    const newConv = await deps.conversations.create("New", "", "anthropic:claude-haiku-4-5-20251001", false, []);
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: oldConv.id, schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ conversationId: newConv.id });
+    expect(res.status).toBe(200);
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.conversationId).toBe(newConv.id);
+  });
+
+  it("PATCH /heartbeats/:id (internal) rejects an unknown conversationId", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ conversationId: "does-not-exist" });
+    expect(res.status).toBe(400);
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.conversationId).toBe("c");
   });
 
   it("POST /audit records entries", async () => {

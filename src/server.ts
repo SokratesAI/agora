@@ -353,6 +353,12 @@ function registerCreateHeartbeatRoute(app: Express, deps: ServerDeps): void {
       workflowId: typeof body.workflowId === "string" ? body.workflowId : undefined,
       vaultPaths,
       enabled: typeof body.enabled === "boolean" ? body.enabled : true,
+      ...(typeof body.rotateConversationEachRun === "boolean"
+        ? { rotateConversationEachRun: body.rotateConversationEachRun }
+        : {}),
+      ...(typeof body.conversationRetention === "number"
+        ? { conversationRetention: body.conversationRetention }
+        : {}),
     });
     res.status(201).json({ status: "created", heartbeat });
   });
@@ -838,6 +844,12 @@ export function createPublicApp(deps: ServerDeps): Express {
       );
     }
     if (typeof body.enabled === "boolean") updates.enabled = body.enabled;
+    if (typeof body.rotateConversationEachRun === "boolean") {
+      updates.rotateConversationEachRun = body.rotateConversationEachRun;
+    }
+    if (typeof body.conversationRetention === "number") {
+      updates.conversationRetention = body.conversationRetention;
+    }
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
@@ -1199,10 +1211,25 @@ export function createInternalApp(deps: ServerDeps): Express {
 
   app.patch("/heartbeats/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
+    // conversationId is otherwise a public-app-only edit (route above) --
+    // allowed here too specifically for the runner's own engine bookkeeping
+    // (2026-08-02, rotateConversationEachRun): it needs to point a
+    // workflow-mode heartbeat at the fresh conversation it just created for
+    // this cycle, the same way it already writes back lastRunAt/lastResult
+    // as a side effect of running. Not a persona-callable tool -- this
+    // route has no capability gate, it's the engine's own bookkeeping.
+    if (
+      typeof body.conversationId === "string" &&
+      !(await conversations.get(body.conversationId))
+    ) {
+      res.status(400).json({ error: "unknown conversation" });
+      return;
+    }
     const updates: HeartbeatUpdate = {};
     if (typeof body.lastRunAt === "string") updates.lastRunAt = body.lastRunAt;
     if (typeof body.lastResult === "string") updates.lastResult = body.lastResult;
     if (typeof body.forceRun === "boolean") updates.forceRun = body.forceRun;
+    if (typeof body.conversationId === "string") updates.conversationId = body.conversationId;
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
