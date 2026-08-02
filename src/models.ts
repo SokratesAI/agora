@@ -41,6 +41,13 @@ export const MODEL_CATALOG: ModelOption[] = [
     contextWindow: "1M",
   },
   {
+    id: "anthropic:claude-opus-5",
+    label: "Claude Opus 5",
+    provider: "anthropic",
+    supportsThinking: true,
+    contextWindow: "1M",
+  },
+  {
     id: "anthropic:claude-fable-5",
     label: "Claude Fable 5",
     provider: "anthropic",
@@ -125,6 +132,13 @@ export const MODEL_CATALOG: ModelOption[] = [
   {
     id: "claude-cli:claude-opus-4-8",
     label: "Claude Opus 4.8 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: true,
+    contextWindow: "1M",
+  },
+  {
+    id: "claude-cli:claude-opus-5",
+    label: "Claude Opus 5 (CLI)",
     provider: "claude-cli",
     supportsThinking: true,
     contextWindow: "1M",
