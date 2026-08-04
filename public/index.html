@@ -419,6 +419,24 @@
     .msg-thinking p { margin: 0 0 0.4rem; }
     .msg-thinking p:last-child { margin-bottom: 0; }
 
+    /* Narration drawer (2026-08-04) -- consecutive tool-use chips and
+       thinking blocks, collapsed by default so the reply is the only thing
+       in the conversation, expandable to the full unabridged run. The
+       collapsed row still moves while a run is in progress (its label
+       carries the step count and the newest step), so it keeps working as
+       the "something is happening" indicator the chips were asked for. */
+    .msg-narration { display: flex; flex-direction: column; gap: 0.4rem; }
+    .msg-narration-toggle {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      background: none; border: 1px dashed var(--border); border-radius: 0.7rem;
+      padding: 0.35rem 0.7rem; font: inherit; font-size: 0.78rem; color: var(--text-dimmer);
+      cursor: pointer; text-align: left;
+    }
+    .msg-narration-toggle:hover { background: var(--bg-raised); color: var(--text-dim); }
+    .msg-narration-chevron { flex: none; }
+    .msg-narration-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msg-narration-body { display: flex; flex-direction: column; gap: 0.4rem; padding-left: 0.6rem; border-left: 2px solid var(--border); }
+
     .msg-attachments { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
     .msg-attachment-image { max-width: 100%; max-height: 16rem; border-radius: 0.7rem; display: block; }
     .msg-attachment-file {

@@ -220,6 +220,10 @@ let sheetTargetId = null;
 let editLinks = [];
 let editingMessageId = null;
 let lastRenderedMessages = [];
+// Which narration drawers the reader has opened, keyed by the id of the
+// group's first message. Survives the 3s re-render; deliberately not
+// persisted across reloads — "hidden by default" is the whole point.
+const expandedNarrationGroups = new Set();
 let messageActionTarget = null;
 let personaFormEditId = null;
 let heartbeatFormEditId = null;
@@ -1773,9 +1777,14 @@ function renderMessages(messages) {
     empty.textContent = "No messages yet.";
     messagesEl.appendChild(empty);
   } else {
-    messages.forEach((message, index) => {
-      messagesEl.appendChild(renderMessageBlock(message, index === messages.length - 1));
-    });
+    const last = messages[messages.length - 1];
+    for (const group of groupNarration(messages)) {
+      messagesEl.appendChild(
+        group.narration
+          ? renderNarrationGroup(group)
+          : renderMessageBlock(group.messages[0], group.messages[0] === last),
+      );
+    }
   }
   updateRetryBanner(messages);
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1791,6 +1800,88 @@ const ACTIVITY_CHIP_LABELS = {
   save_memory: "Saved memory",
   heartbeat: "Ran heartbeat",
 };
+
+// Narration = a persona's tool calls and its own thinking: everything it did
+// on the way to the answer, as opposed to the answer. Edvard, 2026-08-04:
+// "I want the ability to see all your thoughts, all your tool calls, all its
+// inputs and outputs, everything. But I also want the ability to hide those
+// things away and just focus on your answering text." So none of it is
+// dropped or capped -- it is all still here, one click away, and a cycle that
+// makes four hundred calls shows four hundred of them. It just doesn't sit
+// between him and the reply by default.
+function isNarration(message) {
+  return Boolean(message.activity || message.thinking);
+}
+
+// Runs of consecutive narration collapse into one drawer; anything else
+// stays exactly as it rendered before. Consecutive is the right unit: it
+// keeps the narration attached to the reply it produced, rather than
+// hoisting a conversation's worth of tool calls into one lump at the top.
+function groupNarration(messages) {
+  const groups = [];
+  for (const message of messages) {
+    const narration = isNarration(message);
+    const open = groups[groups.length - 1];
+    if (narration && open?.narration) open.messages.push(message);
+    else groups.push({ narration, messages: [message] });
+  }
+  return groups;
+}
+
+function narrationStepLabel(message) {
+  if (message.thinking) return "Thinking";
+  const { capability, detail } = message.activity;
+  const verb = ACTIVITY_CHIP_LABELS[capability] || capability;
+  return detail ? `${verb} · ${detail}` : verb;
+}
+
+// The collapsed label has to carry the liveness the chips used to carry on
+// their own: during a cycle this is the only thing moving on screen, and
+// "displayed after the process is finished... they serve no purpose other
+// than hindsight logging" was the original complaint. So it shows the count
+// AND the newest step, both of which change as the run goes.
+function narrationSummary(messages) {
+  const n = messages.length;
+  return `${n} step${n === 1 ? "" : "s"} · ${narrationStepLabel(messages[n - 1])}`;
+}
+
+function renderNarrationGroup(group) {
+  const { messages } = group;
+  const key = messages[0].id;
+  const wrap = document.createElement("div");
+  wrap.className = "msg-narration";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "msg-narration-toggle";
+  const chevron = document.createElement("span");
+  chevron.className = "msg-narration-chevron";
+  const summary = document.createElement("span");
+  summary.className = "msg-narration-summary";
+  summary.textContent = narrationSummary(messages);
+  toggle.append(chevron, summary);
+
+  const body = document.createElement("div");
+  body.className = "msg-narration-body";
+  for (const message of messages) body.appendChild(renderMessageBlock(message, false));
+
+  const apply = (expanded) => {
+    toggle.setAttribute("aria-expanded", String(expanded));
+    body.hidden = !expanded;
+    chevron.textContent = expanded ? "⌄" : "›";
+  };
+  apply(expandedNarrationGroups.has(key));
+
+  toggle.addEventListener("click", () => {
+    const expanded = !expandedNarrationGroups.has(key);
+    if (expanded) expandedNarrationGroups.add(key);
+    else expandedNarrationGroups.delete(key);
+    apply(expanded);
+  });
+
+  wrap.append(toggle, body);
+  return wrap;
+}
 
 function activityEntryFromMessage(message) {
   return {
