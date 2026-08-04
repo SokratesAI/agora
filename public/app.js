@@ -1645,6 +1645,18 @@ function openAuditDetail(entry) {
   if (entry.before !== undefined && entry.after !== undefined) {
     auditDetailDiff.appendChild(renderDiff(entry.before, entry.after));
   }
+  // What the tool returned. Verbatim and unstyled on purpose -- this is the
+  // thing Edvard asked for three times, and the whole value of it is that it
+  // is the actual bytes that came back, not a rendering of them.
+  if (entry.output !== undefined) {
+    const heading = document.createElement("div");
+    heading.className = "field-label";
+    heading.textContent = entry.isError ? "Output (failed)" : "Output";
+    const pre = document.createElement("pre");
+    pre.className = `audit-output${entry.isError ? " audit-output-error" : ""}`;
+    pre.textContent = entry.output || "(no output)";
+    auditDetailDiff.append(heading, pre);
+  }
   auditDetailScrim.hidden = false;
 }
 
@@ -1777,8 +1789,9 @@ function renderMessages(messages) {
     empty.textContent = "No messages yet.";
     messagesEl.appendChild(empty);
   } else {
-    const last = messages[messages.length - 1];
-    for (const group of groupNarration(messages)) {
+    const visible = mergeToolResults(messages);
+    const last = visible[visible.length - 1];
+    for (const group of groupNarration(visible)) {
       messagesEl.appendChild(
         group.narration
           ? renderNarrationGroup(group)
@@ -1811,6 +1824,54 @@ const ACTIVITY_CHIP_LABELS = {
 // between him and the reply by default.
 function isNarration(message) {
   return Boolean(message.activity || message.thinking);
+}
+
+// A narrated tool call arrives as two messages: the call, sent the moment it
+// starts, and its output, sent when it returns -- both tagged with the same
+// activity.toolUseId by agora-claude-bridge. Two messages rather than one
+// amended message so the chip is live: a `pytest` that runs for four minutes
+// has to appear when it is launched, not when it finishes. Edvard, on the
+// output half (his issue 1, asked three times): "I need to see the command
+// with all metadata and also the output from that command, such as the
+// return of a echo command."
+//
+// Folding them back together is a render-time concern, which is why it lives
+// here and not in the store: nothing on the server is mutated, the audit
+// trail stays append-only, and a half that never arrives simply never gets
+// merged.
+function mergeToolResults(messages) {
+  const callsById = new Map();
+  for (const message of messages) {
+    const id = message.activity?.toolUseId;
+    if (id && message.activity.output === undefined) callsById.set(id, message);
+  }
+
+  const merged = [];
+  for (const message of messages) {
+    const activity = message.activity;
+    if (activity?.output === undefined) {
+      merged.push(message);
+      continue;
+    }
+    const call = activity.toolUseId ? callsById.get(activity.toolUseId) : undefined;
+    if (!call) {
+      // An output whose call we never saw -- a conversation loaded from the
+      // middle, or a lost first half. Render it on its own rather than
+      // dropping it: a chip nobody can explain beats output nobody can see.
+      merged.push(message);
+      continue;
+    }
+    // Replace the call in place, so the merged chip keeps the call's id and
+    // position and the drawer's expanded-state key stays stable.
+    const index = merged.indexOf(call);
+    const withOutput = {
+      ...call,
+      activity: { ...call.activity, output: activity.output, isError: activity.isError },
+    };
+    if (index >= 0) merged[index] = withOutput;
+    callsById.set(activity.toolUseId, withOutput);
+  }
+  return merged;
 }
 
 // Runs of consecutive narration collapse into one drawer; anything else
@@ -1892,6 +1953,8 @@ function activityEntryFromMessage(message) {
     conversationId: currentConversationId,
     before: message.activity.before,
     after: message.activity.after,
+    output: message.activity.output,
+    isError: message.activity.isError,
   };
 }
 
@@ -1924,6 +1987,18 @@ function renderActivityChip(message) {
     delEl.textContent = `-${removed}`;
     stats.append(addEl, delEl);
     chip.appendChild(stats);
+  }
+
+  // A failed tool call used to be indistinguishable from a successful one:
+  // same chip, same label, and the reason lived only in output nobody could
+  // see. Now that the output is here, mark the failure on the chip itself so
+  // it is visible without opening anything.
+  if (activity.isError) {
+    chip.classList.add("msg-activity-failed");
+    const failed = document.createElement("span");
+    failed.className = "msg-activity-failed-mark";
+    failed.textContent = "failed";
+    chip.appendChild(failed);
   }
 
   const chevron = document.createElement("span");

@@ -1255,6 +1255,11 @@ export function createInternalApp(deps: ServerDeps): Express {
       // few hundred chips can't evict the capability trail (audit-store.ts).
       // Only the in-chat copy below is meant to last.
       ephemeral: body.ephemeral === true ? true : undefined,
+      // The two halves of one narrated tool call — the chip when it starts,
+      // the output when it returns — carrying the id that pairs them.
+      toolUseId: typeof body.toolUseId === "string" ? body.toolUseId : undefined,
+      output: typeof body.output === "string" ? body.output : undefined,
+      isError: body.isError === true ? true : undefined,
     });
     // Inline in-chat activity (2026-07-24): every capability call also
     // shows up right where it happened in the conversation, not just in
@@ -1263,14 +1268,23 @@ export function createInternalApp(deps: ServerDeps): Express {
     // unknown/missing conversationId, same graceful-degrade posture as
     // every other conversationId-scoped call here.
     if (entry.conversationId) {
+      // An output entry carries no detail (the call it belongs to already
+      // reported that), so the usual "capability: detail" would read as a
+      // bare "Bash: ". Use the output itself, which is also what makes a
+      // tool's return value findable from conversation search.
+      const text =
+        entry.output !== undefined && !entry.detail
+          ? `${entry.capability}: ${entry.output}`
+          : `${entry.capability}: ${entry.detail}`;
       await conversations.appendMessage(
         entry.conversationId,
         entry.personaName,
-        `${entry.capability}: ${entry.detail}`,
+        text,
         undefined,
         undefined,
         false,
-        { capability: entry.capability, detail: entry.detail, before: entry.before, after: entry.after },
+        { capability: entry.capability, detail: entry.detail, before: entry.before, after: entry.after,
+          toolUseId: entry.toolUseId, output: entry.output, isError: entry.isError },
       );
     }
     res.status(201).json({ status: "recorded", entry });

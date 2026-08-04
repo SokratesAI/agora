@@ -217,3 +217,142 @@ describe("narration drawer", () => {
     expect(visibleText()).toContain("done");
   });
 });
+
+// A narrated tool call arrives as two messages -- the call when it starts,
+// its output when it returns -- and has to read as one chip. Edvard's issue
+// 1, asked three times: "I need to see the command with all metadata and
+// also the output from that command, such as the return of a echo command."
+const call = (capability, detail, toolUseId) =>
+  say("", { activity: { capability, detail, toolUseId } });
+const result = (capability, toolUseId, output, isError = false) =>
+  say("", { activity: { capability, detail: "", toolUseId, output, isError } });
+
+describe("mergeToolResults", () => {
+  it("folds a tool's output into the chip for the call that made it", () => {
+    const merged = globalThis.mergeToolResults([
+      call("Bash", "echo hi", "toolu_a"),
+      result("Bash", "toolu_a", "hi\n"),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.detail).toBe("echo hi");
+    expect(merged[0].activity.output).toBe("hi\n");
+  });
+
+  it("keeps the call's own id and position, so an open drawer stays open", () => {
+    const started = call("Bash", "pytest", "toolu_a");
+    const merged = globalThis.mergeToolResults([
+      say("go"),
+      started,
+      result("Bash", "toolu_a", "97 passed"),
+      say("done"),
+    ]);
+    expect(merged.map((m) => m.text)).toEqual(["go", "", "done"]);
+    expect(merged[1].id).toBe(started.id);
+  });
+
+  it("pairs each call with its own output when several are in flight", () => {
+    const merged = globalThis.mergeToolResults([
+      call("Bash", "one", "toolu_1"),
+      call("Bash", "two", "toolu_2"),
+      result("Bash", "toolu_2", "second"),
+      result("Bash", "toolu_1", "first"),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].activity.output).toBe("first");
+    expect(merged[1].activity.output).toBe("second");
+  });
+
+  it("leaves a call whose output has not arrived yet alone", () => {
+    // The live case: the chip is on screen while the tool is still running.
+    const merged = globalThis.mergeToolResults([call("Bash", "pytest", "toolu_a")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.output).toBeUndefined();
+  });
+
+  it("shows an orphaned output rather than swallowing it", () => {
+    // A conversation opened from the middle, or a lost first half. A chip
+    // nobody can explain beats output nobody can see.
+    const merged = globalThis.mergeToolResults([result("Bash", "toolu_gone", "orphan")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.output).toBe("orphan");
+  });
+
+  it("does not disturb messages that are not tool calls at all", () => {
+    const merged = globalThis.mergeToolResults([
+      say("hello"),
+      chip("vault_read", "a.md"),
+      thought("hmm"),
+    ]);
+    expect(merged).toHaveLength(3);
+  });
+});
+
+describe("tool output in the conversation", () => {
+  it("renders one chip, not two, for a call and its result", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "echo hi", "toolu_a"),
+      result("Bash", "toolu_a", "hi\n"),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    expect(toggleOf(drawer).textContent).toContain("1 step");
+    expect(bodyOf(drawer).children).toHaveLength(1);
+  });
+
+  it("marks a failed tool call on the chip itself", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "nope", "toolu_b"),
+      result("Bash", "toolu_b", "command not found", true),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const failed = bodyOf(drawer).querySelector(".msg-activity-failed");
+    expect(failed).toBeTruthy();
+    expect(failed.textContent).toContain("failed");
+  });
+
+  it("does not mark a call that succeeded", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "echo hi", "toolu_c"),
+      result("Bash", "toolu_c", "hi\n"),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    expect(bodyOf(drawer).querySelector(".msg-activity-failed")).toBeNull();
+  });
+
+  it("puts the output verbatim in the detail sheet", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova",
+      capability: "Bash",
+      detail: "echo hi",
+      ts: "2026-08-04T09:00:00.000Z",
+      conversationId: "c1",
+      output: "hi\n  indented\ttabbed",
+    });
+    const pre = document.querySelector(".audit-output");
+    expect(pre).toBeTruthy();
+    expect(pre.textContent).toBe("hi\n  indented\ttabbed");
+  });
+
+  it("says so when a tool returned nothing, rather than showing a blank box", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova", capability: "Bash", detail: "true",
+      ts: "2026-08-04T09:00:00.000Z", conversationId: "c1", output: "",
+    });
+    expect(document.querySelector(".audit-output").textContent).toBe("(no output)");
+  });
+
+  it("shows no output box for a capability that has none", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova", capability: "vault_read", detail: "a.md",
+      ts: "2026-08-04T09:00:00.000Z", conversationId: "c1",
+    });
+    expect(document.querySelector(".audit-output")).toBeNull();
+  });
+});

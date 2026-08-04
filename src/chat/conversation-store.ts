@@ -54,6 +54,13 @@ export interface Message {
     detail: string;
     before?: string;
     after?: string;
+    /** Pairs the chip written when a tool call starts with the one written
+     * when it returns. The client renders the pair as a single chip, so a
+     * `pytest` still appears the moment it is launched and fills in its
+     * output four minutes later, in place. */
+    toolUseId?: string;
+    output?: string;
+    isError?: boolean;
   };
   /** Extended-thinking chunk (2026-07-31) -- a persona's own thought-summary
    * text (Anthropic's native thinking blocks; Gemini's when includeThoughts

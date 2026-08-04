@@ -410,6 +410,22 @@
     .msg-activity-stats .stat-add { color: var(--diff-add-text); }
     .msg-activity-stats .stat-del { color: var(--diff-del-text); }
     .msg-activity-chevron { flex: none; color: var(--text-dimmer); }
+    /* A tool call that failed. Until its output was visible this looked
+       exactly like a call that worked. */
+    .msg-activity-failed { border-color: var(--diff-del-text); }
+    .msg-activity-failed-mark {
+      flex: none; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--diff-del-text);
+    }
+    /* What a tool returned, verbatim, in the detail sheet. Scrolls rather
+       than wraps: output is often a table or a diff whose columns matter. */
+    .audit-output {
+      margin: 0.35rem 0 0; padding: 0.6rem 0.7rem; max-height: 55vh; overflow: auto;
+      background: var(--bg-input); border: 1px solid var(--border); border-radius: 0.5rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem;
+      white-space: pre; color: var(--text);
+    }
+    .audit-output-error { border-color: var(--diff-del-text); }
 
     /* Extended-thinking chunk (2026-07-31) -- a persona's own thought
        process, visually distinct from a real reply (dimmed, italic,

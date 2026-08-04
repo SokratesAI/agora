@@ -22,6 +22,19 @@ export interface AuditEntry {
    * Bash, Grep… as the session runs. Retained on its own budget — see
    * MAX_EPHEMERAL_ENTRIES. */
   ephemeral?: boolean;
+  /** Correlates the two halves of one narrated tool call: the entry written
+   * when it starts (detail, no output) and the one written when it returns
+   * (output, no detail). The client pairs them into a single chip; the
+   * bridge sends both under the same id. Undefined for everything else. */
+  toolUseId?: string;
+  /** What the tool returned. Capped here rather than by the caller, unlike
+   * before/after: this arrives from agora-claude-bridge over two hops and
+   * is routinely enormous (one `cat` of a log), so the ceiling has to hold
+   * even if a caller forgets it. */
+  output?: string;
+  /** The tool call failed — a non-zero exit, a missing file. Rendered as a
+   * failed chip rather than a normal one. */
+  isError?: boolean;
 }
 
 // Single JSON array capped to the newest MAX_ENTRIES — bounded by design,
@@ -103,6 +116,7 @@ export class AuditStore {
     const full: AuditEntry = { ts: new Date().toISOString(), ...entry };
     if (full.before !== undefined) full.before = full.before.slice(0, CONTENT_CHARS_MAX);
     if (full.after !== undefined) full.after = full.after.slice(0, CONTENT_CHARS_MAX);
+    if (full.output !== undefined) full.output = full.output.slice(0, CONTENT_CHARS_MAX);
     const write = this.writeQueue.then(async () => {
       const entries = await this.readAll();
       entries.push(full);
