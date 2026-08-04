@@ -1251,6 +1251,10 @@ export function createInternalApp(deps: ServerDeps): Express {
       detail: typeof body.detail === "string" ? body.detail : "",
       before: typeof body.before === "string" ? body.before : undefined,
       after: typeof body.after === "string" ? body.after : undefined,
+      // Live tool-use narration, retained on its own budget so a cycle's
+      // few hundred chips can't evict the capability trail (audit-store.ts).
+      // Only the in-chat copy below is meant to last.
+      ephemeral: body.ephemeral === true ? true : undefined,
     });
     // Inline in-chat activity (2026-07-24): every capability call also
     // shows up right where it happened in the conversation, not just in
