@@ -18,6 +18,10 @@ export interface AuditEntry {
    * it's given. */
   before?: string;
   after?: string;
+  /** Live tool-use narration from a claude-cli persona: one entry per Read,
+   * Bash, Grep… as the session runs. Retained on its own budget — see
+   * MAX_EPHEMERAL_ENTRIES. */
+  ephemeral?: boolean;
 }
 
 // Single JSON array capped to the newest MAX_ENTRIES — bounded by design,
@@ -25,10 +29,62 @@ export interface AuditEntry {
 // Decisions/0003's backup once built).
 const MAX_ENTRIES = 500;
 
+// Narration chips get their own budget instead of competing for the one
+// above, because the two classes differ in volume by two orders of
+// magnitude. A capability audit is a handful of entries per day —
+// vault_write with its before/after diff, merge_pr, a heartbeat. One
+// claude-cli cycle emits up to TOOL_ACTIVITY_MAX_PER_CALL (400) chips,
+// four times a day. Sharing a single count budget meant a single cycle
+// evicted ~80% of the trail, so what survived was Nova's own `Bash` lines
+// and nothing else: measured 2026-08-04, 448 of 500 slots held by one
+// conversation. Nothing is lost by capping them separately — every chip is
+// also appended to its conversation (server.ts POST /audit), which is
+// durable and is where they are actually read.
+//
+// Sized at slightly more than one cycle's 400 so the whole of the most
+// recent run is always visible, and no further: the two budgets together
+// bound the file at 1000 entries, and append rewrites the whole file.
+const MAX_EPHEMERAL_ENTRIES = 500;
+
 // before/after content is the one field here that can be arbitrarily large
 // (a whole vault file) — cap it independently of MAX_ENTRIES so one big
 // note can't dominate the 500-entry budget's on-disk size.
 export const CONTENT_CHARS_MAX = 20_000;
+
+/** The retention policy: newest MAX_ENTRIES durable entries plus newest
+ * MAX_EPHEMERAL_ENTRIES narration entries, left in their original
+ * chronological order.
+ *
+ * Exported because this — not the file I/O around it — is the part with a
+ * rule in it worth pinning down.
+ */
+export function trim(entries: AuditEntry[]): AuditEntry[] {
+  let durable = 0;
+  let ephemeral = 0;
+  for (const entry of entries) {
+    if (entry.ephemeral) ephemeral += 1;
+    else durable += 1;
+  }
+  let dropDurable = Math.max(0, durable - MAX_ENTRIES);
+  let dropEphemeral = Math.max(0, ephemeral - MAX_EPHEMERAL_ENTRIES);
+  if (dropDurable === 0 && dropEphemeral === 0) return entries;
+  // Oldest first, dropping only from whichever class is actually over its
+  // budget — which is what stops a burst of chips evicting a vault_write.
+  const kept: AuditEntry[] = [];
+  for (const entry of entries) {
+    if (entry.ephemeral) {
+      if (dropEphemeral > 0) {
+        dropEphemeral -= 1;
+        continue;
+      }
+    } else if (dropDurable > 0) {
+      dropDurable -= 1;
+      continue;
+    }
+    kept.push(entry);
+  }
+  return kept;
+}
 
 export class AuditStore {
   private readonly filePath: string;
@@ -50,7 +106,7 @@ export class AuditStore {
     const write = this.writeQueue.then(async () => {
       const entries = await this.readAll();
       entries.push(full);
-      await this.persist(entries.slice(-MAX_ENTRIES));
+      await this.persist(trim(entries));
     });
     this.writeQueue = write.catch(() => undefined);
     await write;
