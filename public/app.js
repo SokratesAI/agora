@@ -1645,6 +1645,18 @@ function openAuditDetail(entry) {
   if (entry.before !== undefined && entry.after !== undefined) {
     auditDetailDiff.appendChild(renderDiff(entry.before, entry.after));
   }
+  // What the tool returned. Verbatim and unstyled on purpose -- this is the
+  // thing Edvard asked for three times, and the whole value of it is that it
+  // is the actual bytes that came back, not a rendering of them.
+  if (entry.output !== undefined) {
+    const heading = document.createElement("div");
+    heading.className = "field-label";
+    heading.textContent = entry.isError ? "Output (failed)" : "Output";
+    const pre = document.createElement("pre");
+    pre.className = `audit-output${entry.isError ? " audit-output-error" : ""}`;
+    pre.textContent = entry.output || "(no output)";
+    auditDetailDiff.append(heading, pre);
+  }
   auditDetailScrim.hidden = false;
 }
 
@@ -1777,8 +1789,9 @@ function renderMessages(messages) {
     empty.textContent = "No messages yet.";
     messagesEl.appendChild(empty);
   } else {
-    const last = messages[messages.length - 1];
-    for (const group of groupNarration(messages)) {
+    const visible = mergeToolResults(messages);
+    const last = visible[visible.length - 1];
+    for (const group of groupNarration(visible)) {
       messagesEl.appendChild(
         group.narration
           ? renderNarrationGroup(group)
@@ -1788,6 +1801,28 @@ function renderMessages(messages) {
   }
   updateRetryBanner(messages);
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// A claude-cli persona writes in the gaps between its tool calls -- "let me
+// check the deploy first", then a Bash, then "that came back clean, so". The
+// bridge used to hold all of that until the session ended and then hand it
+// over glued into one block, which is why Edvard saw "a block of tool call
+// and then a block of text" and asked for the obvious thing instead
+// (2026-08-04): "how would you like to be presented a story? One does not
+// describe all actions in the story first, and then the narrative. They are
+// in between each other, first a narrative, then an action, then a
+// narrative, then an action."
+//
+// So the bridge now streams each of those passages the moment it is written,
+// down the same path as the tool chips, and they land in the conversation in
+// the order they actually happened. They are narration, not the reply -- the
+// reply is still its own message at the end -- so they belong in the drawer
+// with the chips. They just are not chips: a paragraph rendered as a
+// one-line clickable label with a chevron would be unreadable.
+const NARRATION_TEXT = "assistant_text";
+
+function isNarrationText(message) {
+  return message.activity?.capability === NARRATION_TEXT;
 }
 
 const ACTIVITY_CHIP_LABELS = {
@@ -1813,6 +1848,54 @@ function isNarration(message) {
   return Boolean(message.activity || message.thinking);
 }
 
+// A narrated tool call arrives as two messages: the call, sent the moment it
+// starts, and its output, sent when it returns -- both tagged with the same
+// activity.toolUseId by agora-claude-bridge. Two messages rather than one
+// amended message so the chip is live: a `pytest` that runs for four minutes
+// has to appear when it is launched, not when it finishes. Edvard, on the
+// output half (his issue 1, asked three times): "I need to see the command
+// with all metadata and also the output from that command, such as the
+// return of a echo command."
+//
+// Folding them back together is a render-time concern, which is why it lives
+// here and not in the store: nothing on the server is mutated, the audit
+// trail stays append-only, and a half that never arrives simply never gets
+// merged.
+function mergeToolResults(messages) {
+  const callsById = new Map();
+  for (const message of messages) {
+    const id = message.activity?.toolUseId;
+    if (id && message.activity.output === undefined) callsById.set(id, message);
+  }
+
+  const merged = [];
+  for (const message of messages) {
+    const activity = message.activity;
+    if (activity?.output === undefined) {
+      merged.push(message);
+      continue;
+    }
+    const call = activity.toolUseId ? callsById.get(activity.toolUseId) : undefined;
+    if (!call) {
+      // An output whose call we never saw -- a conversation loaded from the
+      // middle, or a lost first half. Render it on its own rather than
+      // dropping it: a chip nobody can explain beats output nobody can see.
+      merged.push(message);
+      continue;
+    }
+    // Replace the call in place, so the merged chip keeps the call's id and
+    // position and the drawer's expanded-state key stays stable.
+    const index = merged.indexOf(call);
+    const withOutput = {
+      ...call,
+      activity: { ...call.activity, output: activity.output, isError: activity.isError },
+    };
+    if (index >= 0) merged[index] = withOutput;
+    callsById.set(activity.toolUseId, withOutput);
+  }
+  return merged;
+}
+
 // Runs of consecutive narration collapse into one drawer; anything else
 // stays exactly as it rendered before. Consecutive is the right unit: it
 // keeps the narration attached to the reply it produced, rather than
@@ -1831,6 +1914,9 @@ function groupNarration(messages) {
 function narrationStepLabel(message) {
   if (message.thinking) return "Thinking";
   const { capability, detail } = message.activity;
+  // A written passage summarises as its own first line -- "assistant_text ·"
+  // in front of it would be labelling prose with the name of a wire format.
+  if (isNarrationText(message)) return detail.split("\n")[0];
   const verb = ACTIVITY_CHIP_LABELS[capability] || capability;
   return detail ? `${verb} · ${detail}` : verb;
 }
@@ -1892,6 +1978,8 @@ function activityEntryFromMessage(message) {
     conversationId: currentConversationId,
     before: message.activity.before,
     after: message.activity.after,
+    output: message.activity.output,
+    isError: message.activity.isError,
   };
 }
 
@@ -1926,6 +2014,18 @@ function renderActivityChip(message) {
     chip.appendChild(stats);
   }
 
+  // A failed tool call used to be indistinguishable from a successful one:
+  // same chip, same label, and the reason lived only in output nobody could
+  // see. Now that the output is here, mark the failure on the chip itself so
+  // it is visible without opening anything.
+  if (activity.isError) {
+    chip.classList.add("msg-activity-failed");
+    const failed = document.createElement("span");
+    failed.className = "msg-activity-failed-mark";
+    failed.textContent = "failed";
+    chip.appendChild(failed);
+  }
+
   const chevron = document.createElement("span");
   chevron.className = "msg-activity-chevron";
   chevron.textContent = "›";
@@ -1933,6 +2033,18 @@ function renderActivityChip(message) {
 
   chip.addEventListener("click", () => openAuditDetail(activityEntryFromMessage(message)));
   return chip;
+}
+
+// A passage the persona wrote between two tool calls, rendered as the prose
+// it is. Same markdown as a real reply so a bulleted list or a code fence
+// reads correctly, but dimmed and without a sender/timestamp line: inside an
+// expanded drawer these alternate with chips, and a meta line on every one
+// would turn the story back into a list of records.
+function renderNarrationText(message) {
+  const block = document.createElement("div");
+  block.className = "msg-narration-text";
+  block.innerHTML = renderMarkdown(message.activity.detail);
+  return block;
 }
 
 // Extended-thinking chunk (2026-07-31) -- a persona's own thought process,
@@ -1958,6 +2070,9 @@ function renderMessageBlock(message, isLast) {
   // anyone "said". No sender/timestamp meta line, no bubble, no long-press
   // menu: just the same clickable-row-opens-detail affordance as the
   // Activity tab, reusing its diff modal via activityEntryFromMessage.
+  if (isNarrationText(message)) {
+    return renderNarrationText(message);
+  }
   if (message.activity) {
     return renderActivityChip(message);
   }

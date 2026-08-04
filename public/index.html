@@ -48,6 +48,21 @@
       --diff-del-text: #cf222e;
     }
     * { box-sizing: border-box; }
+    /* `hidden` is the only way anything in app.js hides anything, and the
+       browser implements it as a UA rule of the lowest possible weight --
+       so ANY author rule that sets `display` on the same element silently
+       wins and the element stays on screen. That is not hypothetical: the
+       narration drawer shipped unable to hide (agora#38, `.msg-narration-body`
+       is `display: flex`), and Edvard reported it as "the new dropdown ...
+       does not do anything. All the tool calls are always visible".
+       Two more were live at the same time -- `#drawer-search-results` and
+       `#header-subtitle`, both `display:` rules with nothing to switch them
+       off. Thirteen other selectors here each carried their own
+       `X[hidden] { display: none }` line to work around it, which is the
+       tell: the trap is known, and remembering it per-selector had already
+       failed three times. This one rule ends the whole class, and the
+       thirteen workarounds are gone with it. */
+    [hidden] { display: none !important; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       margin: 0;
@@ -119,7 +134,6 @@
     #drawer-scrim {
       position: fixed; inset: 0; background: var(--overlay); z-index: 20;
     }
-    #drawer-scrim[hidden] { display: none; }
     #drawer {
       position: fixed; top: 0; bottom: 0; left: 0;
       width: min(85vw, 320px);
@@ -129,7 +143,6 @@
       display: flex; flex-direction: column;
       padding: 0.75rem; gap: 0.5rem;
     }
-    #drawer[hidden] { display: none; }
     .drawer-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem 0.6rem; }
     .drawer-header h1 { font-size: 1.05rem; margin: 0; flex: 1; }
     .drawer-nav { display: flex; flex-direction: column; gap: 0.1rem; margin-bottom: 0.2rem; }
@@ -198,7 +211,6 @@
 
     /* --- Floating action menus (Edvard's 2026-07-20 pass) ------------- */
     .sheet-scrim { position: fixed; inset: 0; background: transparent; z-index: 30; }
-    .sheet-scrim[hidden] { display: none; }
     .sheet {
       position: fixed; background: var(--bg-raised);
       border: 1px solid var(--border); border-radius: 1rem;
@@ -219,14 +231,12 @@
     .sheet-row:hover { background: var(--bg-input); }
     .sheet-row.danger { color: var(--danger); }
     .sheet-row .sheet-icon { width: 1.3rem; flex: none; display: flex; align-items: center; justify-content: center; }
-    .sheet-row[hidden] { display: none; }
 
     /* --- Modals ------------------------------------------------------- */
     .modal-scrim {
       position: fixed; inset: 0; background: var(--overlay); z-index: 40;
       display: flex; align-items: center; justify-content: center; padding: 1rem;
     }
-    .modal-scrim[hidden] { display: none; }
     .modal {
       width: 100%; max-width: 440px;
       background: var(--bg-raised); border-radius: 1rem; padding: 1rem;
@@ -253,7 +263,6 @@
     .modal-row select { flex: 1; min-width: 0; width: auto; }
     .modal-row input[type="time"], .modal-row input[type="number"] { width: auto; flex: none; }
     .checkbox-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--text-dim); }
-    .checkbox-row[hidden] { display: none; }
     .checkbox-row input { width: 1rem; height: 1rem; }
     .capability-badge {
       font-size: 0.7rem; color: var(--text-dim);
@@ -300,7 +309,6 @@
       background: var(--bg-input); white-space: pre-wrap; word-break: break-word;
       max-height: 10rem; overflow-y: auto;
     }
-    .preview-box[hidden] { display: none; }
     .participant-row {
       display: flex; align-items: center; gap: 0.5rem;
       border: 1px solid var(--border); border-radius: 0.7rem;
@@ -318,7 +326,6 @@
       position: fixed; inset: 0; background: var(--overlay); z-index: 35;
       display: flex; align-items: center; justify-content: center; padding: 1rem;
     }
-    .studio-scrim[hidden] { display: none; }
     .studio-panel {
       width: 100%; max-width: 480px; height: min(88vh, 680px);
       background: var(--bg-raised); border-radius: 1.1rem;
@@ -410,6 +417,22 @@
     .msg-activity-stats .stat-add { color: var(--diff-add-text); }
     .msg-activity-stats .stat-del { color: var(--diff-del-text); }
     .msg-activity-chevron { flex: none; color: var(--text-dimmer); }
+    /* A tool call that failed. Until its output was visible this looked
+       exactly like a call that worked. */
+    .msg-activity-failed { border-color: var(--diff-del-text); }
+    .msg-activity-failed-mark {
+      flex: none; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--diff-del-text);
+    }
+    /* What a tool returned, verbatim, in the detail sheet. Scrolls rather
+       than wraps: output is often a table or a diff whose columns matter. */
+    .audit-output {
+      margin: 0.35rem 0 0; padding: 0.6rem 0.7rem; max-height: 55vh; overflow: auto;
+      background: var(--bg-input); border: 1px solid var(--border); border-radius: 0.5rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem;
+      white-space: pre; color: var(--text);
+    }
+    .audit-output-error { border-color: var(--diff-del-text); }
 
     /* Extended-thinking chunk (2026-07-31) -- a persona's own thought
        process, visually distinct from a real reply (dimmed, italic,
@@ -436,6 +459,13 @@
     .msg-narration-chevron { flex: none; }
     .msg-narration-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .msg-narration-body { display: flex; flex-direction: column; gap: 0.4rem; padding-left: 0.6rem; border-left: 2px solid var(--border); }
+    /* A passage written between two tool calls. Full width and no bubble --
+       it is the connective tissue of the run, and boxing each paragraph the
+       way a chip is boxed would make the drawer read as a list of records
+       again rather than as one continuous account. */
+    .msg-narration-text { color: var(--text-dim); font-size: 0.85rem; }
+    .msg-narration-text p { margin: 0 0 0.4rem; }
+    .msg-narration-text p:last-child { margin-bottom: 0; }
 
     .msg-attachments { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
     .msg-attachment-image { max-width: 100%; max-height: 16rem; border-radius: 0.7rem; display: block; }
@@ -477,7 +507,6 @@
       border-radius: 0.8rem; padding: 0.5rem 0.8rem;
       font-size: 0.8rem; color: var(--text-dim);
     }
-    #paused-banner[hidden] { display: none; }
     #paused-banner button {
       margin-left: auto; border: none; border-radius: 0.6rem;
       background: var(--accent); color: #fff; padding: 0.35rem 0.8rem;
@@ -488,14 +517,12 @@
       max-width: 720px; margin: 0 auto 0.3rem;
       display: flex; gap: 0.3rem; flex-wrap: wrap;
     }
-    #mention-bar[hidden] { display: none; }
     .mention-chip {
       font-size: 0.78rem; background: var(--bg-input);
       border: 1px solid var(--border); color: var(--text);
       border-radius: 1rem; padding: 0.25rem 0.65rem; cursor: pointer;
     }
     #attach-chip-row { display: flex; flex-wrap: wrap; gap: 0.3rem; max-width: 720px; margin: 0 auto 0.4rem; }
-    #attach-chip-row[hidden] { display: none; }
     .attach-chip {
       display: flex; align-items: center; gap: 0.3rem;
       background: var(--bg-input); border: 1px solid var(--border);
@@ -519,7 +546,6 @@
     #plus-button, #mic-button { background: none; color: var(--text-dim); }
     #plus-button:hover, #mic-button:hover { background: var(--border); }
     #mic-button.recording { background: var(--danger); color: #fff; }
-    #mic-button[hidden] { display: none; }
     #send-button { background: var(--accent); color: #fff; }
     #send-button:disabled { opacity: 0.4; cursor: default; }
     textarea#reply-text {
@@ -534,7 +560,6 @@
       border-radius: 1.1rem; padding: 0.4rem; min-width: 210px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.35); z-index: 10;
     }
-    #attach-menu[hidden] { display: none; }
     .attach-menu-row {
       display: flex; align-items: center; gap: 0.7rem; width: 100%;
       background: none; border: none; border-radius: 0.7rem;

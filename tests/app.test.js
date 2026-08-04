@@ -217,3 +217,246 @@ describe("narration drawer", () => {
     expect(visibleText()).toContain("done");
   });
 });
+
+// A narrated tool call arrives as two messages -- the call when it starts,
+// its output when it returns -- and has to read as one chip. Edvard's issue
+// 1, asked three times: "I need to see the command with all metadata and
+// also the output from that command, such as the return of a echo command."
+const call = (capability, detail, toolUseId) =>
+  say("", { activity: { capability, detail, toolUseId } });
+const result = (capability, toolUseId, output, isError = false) =>
+  say("", { activity: { capability, detail: "", toolUseId, output, isError } });
+
+describe("mergeToolResults", () => {
+  it("folds a tool's output into the chip for the call that made it", () => {
+    const merged = globalThis.mergeToolResults([
+      call("Bash", "echo hi", "toolu_a"),
+      result("Bash", "toolu_a", "hi\n"),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.detail).toBe("echo hi");
+    expect(merged[0].activity.output).toBe("hi\n");
+  });
+
+  it("keeps the call's own id and position, so an open drawer stays open", () => {
+    const started = call("Bash", "pytest", "toolu_a");
+    const merged = globalThis.mergeToolResults([
+      say("go"),
+      started,
+      result("Bash", "toolu_a", "97 passed"),
+      say("done"),
+    ]);
+    expect(merged.map((m) => m.text)).toEqual(["go", "", "done"]);
+    expect(merged[1].id).toBe(started.id);
+  });
+
+  it("pairs each call with its own output when several are in flight", () => {
+    const merged = globalThis.mergeToolResults([
+      call("Bash", "one", "toolu_1"),
+      call("Bash", "two", "toolu_2"),
+      result("Bash", "toolu_2", "second"),
+      result("Bash", "toolu_1", "first"),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].activity.output).toBe("first");
+    expect(merged[1].activity.output).toBe("second");
+  });
+
+  it("leaves a call whose output has not arrived yet alone", () => {
+    // The live case: the chip is on screen while the tool is still running.
+    const merged = globalThis.mergeToolResults([call("Bash", "pytest", "toolu_a")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.output).toBeUndefined();
+  });
+
+  it("shows an orphaned output rather than swallowing it", () => {
+    // A conversation opened from the middle, or a lost first half. A chip
+    // nobody can explain beats output nobody can see.
+    const merged = globalThis.mergeToolResults([result("Bash", "toolu_gone", "orphan")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.output).toBe("orphan");
+  });
+
+  it("does not disturb messages that are not tool calls at all", () => {
+    const merged = globalThis.mergeToolResults([
+      say("hello"),
+      chip("vault_read", "a.md"),
+      thought("hmm"),
+    ]);
+    expect(merged).toHaveLength(3);
+  });
+});
+
+describe("tool output in the conversation", () => {
+  it("renders one chip, not two, for a call and its result", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "echo hi", "toolu_a"),
+      result("Bash", "toolu_a", "hi\n"),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    expect(toggleOf(drawer).textContent).toContain("1 step");
+    expect(bodyOf(drawer).children).toHaveLength(1);
+  });
+
+  it("marks a failed tool call on the chip itself", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "nope", "toolu_b"),
+      result("Bash", "toolu_b", "command not found", true),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const failed = bodyOf(drawer).querySelector(".msg-activity-failed");
+    expect(failed).toBeTruthy();
+    expect(failed.textContent).toContain("failed");
+  });
+
+  it("does not mark a call that succeeded", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "echo hi", "toolu_c"),
+      result("Bash", "toolu_c", "hi\n"),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    expect(bodyOf(drawer).querySelector(".msg-activity-failed")).toBeNull();
+  });
+
+  it("puts the output verbatim in the detail sheet", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova",
+      capability: "Bash",
+      detail: "echo hi",
+      ts: "2026-08-04T09:00:00.000Z",
+      conversationId: "c1",
+      output: "hi\n  indented\ttabbed",
+    });
+    const pre = document.querySelector(".audit-output");
+    expect(pre).toBeTruthy();
+    expect(pre.textContent).toBe("hi\n  indented\ttabbed");
+  });
+
+  it("says so when a tool returned nothing, rather than showing a blank box", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova", capability: "Bash", detail: "true",
+      ts: "2026-08-04T09:00:00.000Z", conversationId: "c1", output: "",
+    });
+    expect(document.querySelector(".audit-output").textContent).toBe("(no output)");
+  });
+
+  it("shows no output box for a capability that has none", () => {
+    globalThis.openAuditDetail({
+      personaName: "Nova", capability: "vault_read", detail: "a.md",
+      ts: "2026-08-04T09:00:00.000Z", conversationId: "c1",
+    });
+    expect(document.querySelector(".audit-output")).toBeNull();
+  });
+});
+
+// The drawer this suite already covers shipped unable to hide anything, and
+// every test above passed the whole time. jsdom's getComputedStyle
+// special-cases the `hidden` attribute and reports `display: none` no matter
+// what the stylesheet says, so the one thing that was broken -- an author
+// `display: flex` outweighing the UA rule in a real browser -- is exactly the
+// thing this environment cannot see. Asserting on the stylesheet instead is
+// not a workaround for a missing browser: the invariant genuinely is a
+// property of the CSS, and checking it here is what would have caught it.
+describe("the hidden attribute actually hides", () => {
+  // Comments stripped first: this file documents the rule in prose right
+  // above it, and a scan of the raw text finds the explanation as readily as
+  // the code.
+  const styleText = () =>
+    [...document.querySelectorAll("style")]
+      .map((el) => el.textContent)
+      .join("\n")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  const hiddenSelectors = () =>
+    [...styleText().matchAll(/([^{}]*?)\[hidden\][^{}]*\{([^}]*)\}/g)].map((m) => ({
+      prefix: m[1].trim(),
+      body: m[2],
+    }));
+
+  it("overrides author display rules globally, not per selector", () => {
+    const global = hiddenSelectors().filter((r) => r.prefix === "");
+    expect(global).toHaveLength(1);
+    expect(global[0].body).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it("leaves no selector relying on a per-selector [hidden] workaround", () => {
+    // Thirteen of these existed, and the three selectors that needed one and
+    // never got it were the live bugs -- including the narration drawer
+    // Edvard reported. A new one appearing means someone hit the trap again
+    // and patched their own case instead of trusting the rule above.
+    expect(hiddenSelectors().map((r) => r.prefix).filter(Boolean)).toEqual([]);
+  });
+});
+
+describe("narration text", () => {
+  const passage = (text) => say("", { activity: { capability: "assistant_text", detail: text } });
+
+  it("renders as prose, not as a one-line chip", () => {
+    globalThis.renderMessages([say("go"), passage("Let me check the deploy first."), say("done")]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const prose = bodyOf(drawer).querySelector(".msg-narration-text");
+    expect(prose).toBeTruthy();
+    expect(prose.textContent).toContain("Let me check the deploy first.");
+    expect(bodyOf(drawer).querySelector(".msg-activity-chip")).toBeNull();
+  });
+
+  it("keeps the written passages and the tool calls in the order they happened", () => {
+    globalThis.renderMessages([
+      say("go"),
+      passage("First I look at the pods."),
+      chip("kubectl_read", "get pods"),
+      passage("They are all up, so now the logs."),
+      chip("kubectl_read", "logs"),
+      say("all healthy"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const kinds = [...bodyOf(drawer).children].map((el) =>
+      el.classList.contains("msg-narration-text") ? "text" : "tool",
+    );
+    expect(kinds).toEqual(["text", "tool", "text", "tool"]);
+  });
+
+  it("summarises a passage by its first line, not by the wire capability", () => {
+    globalThis.renderMessages([
+      say("go"),
+      passage("Checking the deploy now.\nThen the logs."),
+    ]);
+    const [drawer] = drawers();
+    const label = toggleOf(drawer).textContent;
+    expect(label).toContain("Checking the deploy now.");
+    expect(label).not.toContain("assistant_text");
+    expect(label).not.toContain("Then the logs.");
+  });
+
+  it("stays hidden with the rest of the narration until the drawer is opened", () => {
+    globalThis.renderMessages([say("go"), passage("thinking out loud"), say("done")]);
+    expect(visibleText()).toContain("done");
+    expect(visibleText()).not.toContain("thinking out loud");
+  });
+
+  it("survives the tool-result merge, which has no id to pair it on", () => {
+    const messages = [
+      passage("before the call"),
+      call("Bash", "echo hi", "toolu_p"),
+      result("Bash", "toolu_p", "hi\n"),
+      passage("after the call"),
+    ];
+    const merged = globalThis.mergeToolResults(messages);
+    expect(merged.map((m) => m.activity.capability)).toEqual([
+      "assistant_text",
+      "Bash",
+      "assistant_text",
+    ]);
+    expect(merged[1].activity.output).toBe("hi\n");
+  });
+});
