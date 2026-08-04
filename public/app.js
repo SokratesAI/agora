@@ -1803,6 +1803,28 @@ function renderMessages(messages) {
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+// A claude-cli persona writes in the gaps between its tool calls -- "let me
+// check the deploy first", then a Bash, then "that came back clean, so". The
+// bridge used to hold all of that until the session ended and then hand it
+// over glued into one block, which is why Edvard saw "a block of tool call
+// and then a block of text" and asked for the obvious thing instead
+// (2026-08-04): "how would you like to be presented a story? One does not
+// describe all actions in the story first, and then the narrative. They are
+// in between each other, first a narrative, then an action, then a
+// narrative, then an action."
+//
+// So the bridge now streams each of those passages the moment it is written,
+// down the same path as the tool chips, and they land in the conversation in
+// the order they actually happened. They are narration, not the reply -- the
+// reply is still its own message at the end -- so they belong in the drawer
+// with the chips. They just are not chips: a paragraph rendered as a
+// one-line clickable label with a chevron would be unreadable.
+const NARRATION_TEXT = "assistant_text";
+
+function isNarrationText(message) {
+  return message.activity?.capability === NARRATION_TEXT;
+}
+
 const ACTIVITY_CHIP_LABELS = {
   vault_read: "Read vault file",
   vault_write: "Wrote vault file",
@@ -1892,6 +1914,9 @@ function groupNarration(messages) {
 function narrationStepLabel(message) {
   if (message.thinking) return "Thinking";
   const { capability, detail } = message.activity;
+  // A written passage summarises as its own first line -- "assistant_text ·"
+  // in front of it would be labelling prose with the name of a wire format.
+  if (isNarrationText(message)) return detail.split("\n")[0];
   const verb = ACTIVITY_CHIP_LABELS[capability] || capability;
   return detail ? `${verb} · ${detail}` : verb;
 }
@@ -2010,6 +2035,18 @@ function renderActivityChip(message) {
   return chip;
 }
 
+// A passage the persona wrote between two tool calls, rendered as the prose
+// it is. Same markdown as a real reply so a bulleted list or a code fence
+// reads correctly, but dimmed and without a sender/timestamp line: inside an
+// expanded drawer these alternate with chips, and a meta line on every one
+// would turn the story back into a list of records.
+function renderNarrationText(message) {
+  const block = document.createElement("div");
+  block.className = "msg-narration-text";
+  block.innerHTML = renderMarkdown(message.activity.detail);
+  return block;
+}
+
 // Extended-thinking chunk (2026-07-31) -- a persona's own thought process,
 // not the answer. No long-press menu (nothing to edit/regenerate/forget
 // separately from the reply it led to), dimmed/italic so it reads as
@@ -2033,6 +2070,9 @@ function renderMessageBlock(message, isLast) {
   // anyone "said". No sender/timestamp meta line, no bubble, no long-press
   // menu: just the same clickable-row-opens-detail affordance as the
   // Activity tab, reusing its diff modal via activityEntryFromMessage.
+  if (isNarrationText(message)) {
+    return renderNarrationText(message);
+  }
   if (message.activity) {
     return renderActivityChip(message);
   }

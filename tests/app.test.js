@@ -356,3 +356,107 @@ describe("tool output in the conversation", () => {
     expect(document.querySelector(".audit-output")).toBeNull();
   });
 });
+
+// The drawer this suite already covers shipped unable to hide anything, and
+// every test above passed the whole time. jsdom's getComputedStyle
+// special-cases the `hidden` attribute and reports `display: none` no matter
+// what the stylesheet says, so the one thing that was broken -- an author
+// `display: flex` outweighing the UA rule in a real browser -- is exactly the
+// thing this environment cannot see. Asserting on the stylesheet instead is
+// not a workaround for a missing browser: the invariant genuinely is a
+// property of the CSS, and checking it here is what would have caught it.
+describe("the hidden attribute actually hides", () => {
+  // Comments stripped first: this file documents the rule in prose right
+  // above it, and a scan of the raw text finds the explanation as readily as
+  // the code.
+  const styleText = () =>
+    [...document.querySelectorAll("style")]
+      .map((el) => el.textContent)
+      .join("\n")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  const hiddenSelectors = () =>
+    [...styleText().matchAll(/([^{}]*?)\[hidden\][^{}]*\{([^}]*)\}/g)].map((m) => ({
+      prefix: m[1].trim(),
+      body: m[2],
+    }));
+
+  it("overrides author display rules globally, not per selector", () => {
+    const global = hiddenSelectors().filter((r) => r.prefix === "");
+    expect(global).toHaveLength(1);
+    expect(global[0].body).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it("leaves no selector relying on a per-selector [hidden] workaround", () => {
+    // Thirteen of these existed, and the three selectors that needed one and
+    // never got it were the live bugs -- including the narration drawer
+    // Edvard reported. A new one appearing means someone hit the trap again
+    // and patched their own case instead of trusting the rule above.
+    expect(hiddenSelectors().map((r) => r.prefix).filter(Boolean)).toEqual([]);
+  });
+});
+
+describe("narration text", () => {
+  const passage = (text) => say("", { activity: { capability: "assistant_text", detail: text } });
+
+  it("renders as prose, not as a one-line chip", () => {
+    globalThis.renderMessages([say("go"), passage("Let me check the deploy first."), say("done")]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const prose = bodyOf(drawer).querySelector(".msg-narration-text");
+    expect(prose).toBeTruthy();
+    expect(prose.textContent).toContain("Let me check the deploy first.");
+    expect(bodyOf(drawer).querySelector(".msg-activity-chip")).toBeNull();
+  });
+
+  it("keeps the written passages and the tool calls in the order they happened", () => {
+    globalThis.renderMessages([
+      say("go"),
+      passage("First I look at the pods."),
+      chip("kubectl_read", "get pods"),
+      passage("They are all up, so now the logs."),
+      chip("kubectl_read", "logs"),
+      say("all healthy"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const kinds = [...bodyOf(drawer).children].map((el) =>
+      el.classList.contains("msg-narration-text") ? "text" : "tool",
+    );
+    expect(kinds).toEqual(["text", "tool", "text", "tool"]);
+  });
+
+  it("summarises a passage by its first line, not by the wire capability", () => {
+    globalThis.renderMessages([
+      say("go"),
+      passage("Checking the deploy now.\nThen the logs."),
+    ]);
+    const [drawer] = drawers();
+    const label = toggleOf(drawer).textContent;
+    expect(label).toContain("Checking the deploy now.");
+    expect(label).not.toContain("assistant_text");
+    expect(label).not.toContain("Then the logs.");
+  });
+
+  it("stays hidden with the rest of the narration until the drawer is opened", () => {
+    globalThis.renderMessages([say("go"), passage("thinking out loud"), say("done")]);
+    expect(visibleText()).toContain("done");
+    expect(visibleText()).not.toContain("thinking out loud");
+  });
+
+  it("survives the tool-result merge, which has no id to pair it on", () => {
+    const messages = [
+      passage("before the call"),
+      call("Bash", "echo hi", "toolu_p"),
+      result("Bash", "toolu_p", "hi\n"),
+      passage("after the call"),
+    ];
+    const merged = globalThis.mergeToolResults(messages);
+    expect(merged.map((m) => m.activity.capability)).toEqual([
+      "assistant_text",
+      "Bash",
+      "assistant_text",
+    ]);
+    expect(merged[1].activity.output).toBe("hi\n");
+  });
+});
