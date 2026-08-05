@@ -1151,6 +1151,16 @@ async function renderHeartbeatStudio() {
   }
 }
 
+// " for 38m" — how long the in-flight run has been going, so the answer to
+// "is one already going?" carries its own evidence. Empty when the server
+// sent no timestamp, rather than guessing at a duration.
+function formatRunningFor(runningSince) {
+  if (!runningSince) return "";
+  const minutes = Math.floor((Date.now() - new Date(runningSince).getTime()) / 60000);
+  if (!Number.isFinite(minutes) || minutes < 0) return "";
+  return minutes < 60 ? ` for ${minutes}m` : ` for ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 function renderHeartbeatRow(heartbeat) {
   const persona = allPersonas.find((p) => p.id === heartbeat.personaId);
   const conversation = allConversations.find((c) => c.id === heartbeat.conversationId);
@@ -1179,8 +1189,12 @@ function renderHeartbeatRow(heartbeat) {
   run.textContent = "Run now";
   run.addEventListener("click", async (e) => {
     e.stopPropagation();
-    await api("POST", `/heartbeats/${heartbeat.id}/run`);
-    setStatus("Queued — runs within ~5s.");
+    const { data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
+    if (data?.status === "already-running") {
+      setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
+    } else {
+      setStatus("Queued — runs within ~5s.");
+    }
     setTimeout(renderHeartbeatStudio, 1500);
   });
   const toggle = document.createElement("button");

@@ -642,6 +642,45 @@ describe("agora public app", () => {
     const res = await request(app).post(`/heartbeats/${created.body.heartbeat.id}/run`);
     expect(res.status).toBe(200);
     expect(res.body.heartbeat.forceRun).toBe(true);
+    expect(res.body.status).toBe("queued");
+    expect(res.body.runningSince).toBeNull();
+  });
+
+  it("POST /heartbeats/:id/run reports already-running instead of a bare queued", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    // Exactly what the runner writes as its claim when a cycle starts.
+    const startedAt = new Date().toISOString();
+    await deps.heartbeats.update(id, { lastResult: "running", lastRunAt: startedAt });
+
+    const res = await request(app).post(`/heartbeats/${id}/run`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("already-running");
+    expect(res.body.runningSince).toBe(startedAt);
+    // Still queued, not refused -- a stuck "running" must not brick the button.
+    expect(res.body.heartbeat.forceRun).toBe(true);
+  });
+
+  it("POST /heartbeats/:id/run goes back to queued once a run has finished", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    await deps.heartbeats.update(id, { lastResult: "ok", lastRunAt: new Date().toISOString() });
+
+    const res = await request(app).post(`/heartbeats/${id}/run`);
+    expect(res.body.status).toBe("queued");
+    expect(res.body.runningSince).toBeNull();
   });
 
   it("DELETE /conversations/:id refuses while heartbeats are bound to it", async () => {

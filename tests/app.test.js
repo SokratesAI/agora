@@ -460,3 +460,30 @@ describe("narration text", () => {
     expect(merged[1].activity.output).toBe("hi\n");
   });
 });
+
+describe("formatRunningFor", () => {
+  // The "Run now" button used to claim "Queued — runs within ~5s." no matter
+  // what. When a cycle is already in flight the press is only picked up after
+  // it ends, so that sentence was false by up to ~45 minutes -- which is how
+  // Edvard came to suspect he was spawning runs in parallel.
+  it("is empty without a timestamp, rather than guessing a duration", () => {
+    expect(globalThis.formatRunningFor(null)).toBe("");
+    expect(globalThis.formatRunningFor("")).toBe("");
+    expect(globalThis.formatRunningFor(undefined)).toBe("");
+  });
+
+  it("renders minutes under an hour", () => {
+    const since = new Date(Date.now() - 38 * 60000).toISOString();
+    expect(globalThis.formatRunningFor(since)).toBe(" for 38m");
+  });
+
+  it("splits into hours and minutes past an hour", () => {
+    const since = new Date(Date.now() - (2 * 60 + 5) * 60000).toISOString();
+    expect(globalThis.formatRunningFor(since)).toBe(" for 2h 5m");
+  });
+
+  it("stays empty on an unparseable or future timestamp", () => {
+    expect(globalThis.formatRunningFor("not-a-date")).toBe("");
+    expect(globalThis.formatRunningFor(new Date(Date.now() + 60000).toISOString())).toBe("");
+  });
+});
