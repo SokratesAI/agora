@@ -868,12 +868,34 @@ export function createPublicApp(deps: ServerDeps): Express {
   });
 
   app.post("/heartbeats/:id/run", async (req, res) => {
+    // Read BEFORE the update: the runner writes lastResult "running" as its
+    // claim the moment a run starts, and overwrites it on every terminal
+    // path, so this is the one honest "is a cycle in flight right now"
+    // signal. The update below only touches forceRun, but reading first
+    // keeps that independent of what update happens to return.
+    const before = await heartbeats.get(req.params.id);
     const heartbeat = await heartbeats.update(req.params.id, { forceRun: true });
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
       return;
     }
-    res.status(200).json({ status: "queued", heartbeat });
+    // Pressing "Run now" during a run does NOT start a second one -- the
+    // runner's poll loop is single-threaded and the deployment is Recreate
+    // with one replica, so the press is picked up only after the current
+    // cycle ends, up to ~45 minutes later. Saying "queued" for both cases
+    // is what made that invisible: Edvard, 2026-08-05, "i might spawn two
+    // jobs in paralell without knowing".
+    //
+    // Still queued rather than refused, deliberately. A hard-killed pod
+    // leaves lastResult stuck at "running" forever, and a version that
+    // blocked would make the button permanently dead with no way back.
+    // Reporting is recoverable; refusing is not.
+    const running = before?.lastResult === "running";
+    res.status(200).json({
+      status: running ? "already-running" : "queued",
+      runningSince: running ? before?.lastRunAt ?? null : null,
+      heartbeat,
+    });
   });
 
   // ---- Workflows (Decisions/0009) ---------------------------------------
