@@ -14,7 +14,8 @@ export interface Config {
    * as a warning at startup) so a missing secret can't wedge a deploy. */
   agentToken: string | undefined;
   /** Window in which a notification is recorded but not pushed to the phone.
-   * Defaults to 23:00–07:00; set QUIET_HOURS_START to an empty string to turn
+   * Defaults to 22:00–07:00 — the hours Edvard told us he sleeps
+   * (2026-08-08); set QUIET_HOURS_START to an empty string to turn
    * it off entirely. */
   quietHours: QuietHours | undefined;
   /** Wall clock the window is read against — Edvard lives in Oslo. */
@@ -32,7 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerUrl: env.RUNNER_URL,
     agentToken: env.AGORA_AGENT_TOKEN,
     quietHours: parseQuietHours(
-      env.QUIET_HOURS_START ?? "23:00",
+      env.QUIET_HOURS_START ?? "22:00",
       env.QUIET_HOURS_END ?? "07:00",
     ),
     quietHoursTimeZone: env.QUIET_HOURS_TZ ?? "Europe/Oslo",
