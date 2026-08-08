@@ -65,13 +65,73 @@ export interface HeartbeatUpdate {
 }
 
 const HHMM = "([01]?\\d|2[0-3]):[0-5]\\d";
+/** Note that `cron@` is matched loosely here on purpose — the fields are
+ * checked by isValidCron, not by this regex. So matching SCHEDULE_RE no
+ * longer implies a schedule is valid; isValidSchedule is the only answer,
+ * and it is what both routes call. */
 export const SCHEDULE_RE = new RegExp(
-  `^(daily@${HHMM}|every@\\d+[mh](@${HHMM})?)$`,
+  `^(daily@${HHMM}|every@\\d+[mh](@${HHMM})?|cron@.+)$`,
 );
 
 export const SCHEDULE_ERROR =
-  "schedule must be daily@HH:MM, every@N[m|h], or every@N[m|h]@HH:MM " +
-  "(anchored — the interval must divide 24h evenly)";
+  "schedule must be daily@HH:MM, every@N[m|h], every@N[m|h]@HH:MM " +
+  "(anchored — the interval must divide 24h evenly), or " +
+  "cron@<minute hour day-of-month month day-of-week>";
+
+/** Cron field bounds, in field order. Day-of-week runs to 7 because 0 and 7
+ * both mean Sunday — the runner's parse_cron_field folds 7 back to 0. */
+const CRON_BOUNDS: ReadonlyArray<readonly [number, number]> = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 7],
+];
+
+/** Whether one cron field parses, to exactly the grammar the runner accepts:
+ * `*`, `N`, `a-b`, any of those with a `/step` suffix, comma-separated.
+ *
+ * This is a second implementation of agora-persona-runner's
+ * parse_cron_field, and the two are only useful if this one is not looser —
+ * anything accepted here reaches a runner that has to make sense of it. It is
+ * deliberately a validator rather than a parser: it answers yes/no and never
+ * has to expand a range, which is the half that would actually drift. */
+function isValidCronField(field: string, index: number): boolean {
+  const [low, high] = CRON_BOUNDS[index];
+  const parts = field.split(",");
+  return parts.every((part) => {
+    const slash = part.indexOf("/");
+    const spec = slash === -1 ? part : part.slice(0, slash);
+    const stepText = slash === -1 ? "" : part.slice(slash + 1);
+    if (slash !== -1 && !/^\d+$/.test(stepText)) return false;
+    if (stepText && Number(stepText) < 1) return false;
+    if (spec === "*") return true;
+    const dash = spec.indexOf("-");
+    if (dash === -1) {
+      // A bare value with a step ("5/15") has no range to step through.
+      return /^\d+$/.test(spec) && !stepText && inBounds(Number(spec), low, high);
+    }
+    const start = spec.slice(0, dash);
+    const end = spec.slice(dash + 1);
+    if (!/^\d+$/.test(start) || !/^\d+$/.test(end)) return false;
+    return (
+      inBounds(Number(start), low, high) &&
+      inBounds(Number(end), low, high) &&
+      Number(start) <= Number(end)
+    );
+  });
+}
+
+function inBounds(value: number, low: number, high: number): boolean {
+  return Number.isInteger(value) && value >= low && value <= high;
+}
+
+/** Whether a bare 5-field cron expression (no "cron@" prefix) is valid. */
+export function isValidCron(expr: string): boolean {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5 || expr.trim() === "") return false;
+  return fields.every((field, i) => isValidCronField(field, i));
+}
 
 /** An anchored interval ("every@6h@12:00" = 12:00, 18:00, 00:00, 06:00) only
  * has a stable meaning when the interval divides 24h. Each day lays its slots
@@ -83,6 +143,9 @@ export const SCHEDULE_ERROR =
  * agora-persona-runner's turns.py. */
 export function isValidSchedule(schedule: string): boolean {
   if (!SCHEDULE_RE.test(schedule)) return false;
+  if (schedule.startsWith("cron@")) {
+    return isValidCron(schedule.slice("cron@".length));
+  }
   if (!schedule.startsWith("every@")) return true;
   const [amount, anchor] = schedule.slice("every@".length).split("@");
   if (anchor === undefined) return true;

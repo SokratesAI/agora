@@ -294,6 +294,17 @@
       border-radius: 1rem; padding: 0.25rem 0.65rem; cursor: pointer;
     }
     .modal-hint { font-size: 0.72rem; color: var(--text-dimmer); margin: -0.2rem 0 0; line-height: 1.35; }
+    .day-chips { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+    .day-chip {
+      border: 1px solid var(--border); background: var(--bg-input); color: var(--text-dim);
+      border-radius: 0.7rem; padding: 0.35rem 0.6rem; font: inherit; font-size: 0.8rem;
+      cursor: pointer; min-width: 2.7rem;
+    }
+    .day-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .time-list { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
+    .time-row { display: flex; gap: 0.4rem; align-items: center; }
+    .time-row button { border: none; border-radius: 0.6rem; padding: 0.35rem 0.6rem; font: inherit; cursor: pointer; background: var(--bg-input); color: var(--text-dim); }
+    .schedule-preview-bad { color: var(--danger); }
     .modal-status { font-size: 0.75rem; color: var(--text-dim); min-height: 1em; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.2rem; flex-wrap: wrap; }
     .modal-actions button, .inline-button {
@@ -884,6 +895,8 @@
         <select id="heartbeat-form-schedule-type">
           <option value="daily">Daily at</option>
           <option value="every">Every</option>
+          <option value="days">On days, at</option>
+          <option value="cron">Cron expression</option>
         </select>
         <input id="heartbeat-form-time" type="time" value="08:00" />
         <input id="heartbeat-form-interval" type="number" min="1" value="4" style="width:4.5rem;" hidden />
@@ -895,9 +908,21 @@
           <input type="checkbox" id="heartbeat-form-anchor-enabled" /> starting at
           <input id="heartbeat-form-anchor" type="time" value="12:00" disabled />
         </label>
+        <input id="heartbeat-form-cron" type="text" placeholder="0 8 * * 1-5"
+               style="flex:1;min-width:10rem;" hidden />
       </div>
-      <p class="modal-hint">Daily times are Europe/Oslo. Without a starting time,
-        "every" counts from when the last run finished, so the times drift.</p>
+      <!-- The picker. Chips compile to the same cron string the raw box takes,
+           so switching between the two modes never changes the schedule. -->
+      <div class="day-chips" id="heartbeat-form-days" hidden></div>
+      <div class="time-list" id="heartbeat-form-times" hidden>
+        <div id="heartbeat-form-times-rows"></div>
+        <button type="button" class="btn-secondary" id="heartbeat-form-add-time">＋ Add a time</button>
+      </div>
+      <p class="modal-hint" id="heartbeat-form-schedule-preview" hidden></p>
+      <p class="modal-hint">All times are Europe/Oslo. Without a starting time,
+        "every" counts from when the last run finished, so the times drift.
+        "On days" and "Cron expression" are the same schedule seen two ways —
+        switch between them freely.</p>
       <h3>Task for the triggered turn</h3>
       <textarea id="heartbeat-form-task" placeholder="Prompt layered on top of the persona for this trigger (e.g. 'Ask how yesterday's training went and set today's focus.')" rows="6"></textarea>
       <h3>Vault context (injected fresh on every run)</h3>
@@ -999,6 +1024,9 @@
     </form>
   </div>
 
+  <!-- Before app.js: a classic script, so it runs in order and AgoraCron is
+       already on window by the time app.js's top-level code reads it. -->
+  <script src="/cron.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

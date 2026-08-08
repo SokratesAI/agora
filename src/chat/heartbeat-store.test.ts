@@ -125,4 +125,41 @@ describe("HeartbeatStore", () => {
     }
     expect(isValidSchedule("nonsense")).toBe(false);
   });
+
+  // cron@ -- Edvard's issues.md #37, second half. The three things an
+  // anchored interval cannot say are weekdays only, twice a day, and a
+  // daytime-only window; all three are one cron expression.
+  it("isValidSchedule accepts the cron forms the picker generates", () => {
+    for (const ok of [
+      "cron@0 8 * * 1-5",        // weekdays at 08:00
+      "cron@0 8,20 * * *",       // twice a day
+      "cron@0 8-22/2 * * *",     // every 2h through the day, none at night
+      "cron@*/15 * * * *",       // every quarter hour
+      "cron@0 0 1 * *",          // the 1st of the month
+      "cron@30 6 * * 0",         // Sundays -- 0 is Sunday
+      "cron@30 6 * * 7",         // and so is 7
+      "cron@0 8 * 1-6 1,3,5",
+    ]) {
+      expect(isValidSchedule(ok)).toBe(true);
+    }
+  });
+
+  it("isValidSchedule rejects cron the runner could not evaluate", () => {
+    for (const bad of [
+      "cron@0 8 * *",            // four fields
+      "cron@0 8 * * * *",        // six
+      "cron@60 8 * * *",         // minute out of range
+      "cron@0 24 * * *",         // hour out of range
+      "cron@0 8 0 * *",          // day-of-month is 1-based
+      "cron@0 8 * * 8",          // day-of-week tops out at 7
+      "cron@0 8-2 * * *",        // backwards range
+      "cron@0 */0 * * *",        // step of zero
+      "cron@0 5/15 * * *",       // a step needs a range to walk
+      "cron@0 eight * * *",
+      "cron@",
+      "cron@     ",
+    ]) {
+      expect(isValidSchedule(bad)).toBe(false);
+    }
+  });
 });

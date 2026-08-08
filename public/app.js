@@ -164,6 +164,12 @@ const heartbeatFormUnit = $("heartbeat-form-unit");
 const heartbeatFormAnchorRow = $("heartbeat-form-anchor-row");
 const heartbeatFormAnchorEnabled = $("heartbeat-form-anchor-enabled");
 const heartbeatFormAnchor = $("heartbeat-form-anchor");
+const heartbeatFormCron = $("heartbeat-form-cron");
+const heartbeatFormDays = $("heartbeat-form-days");
+const heartbeatFormTimes = $("heartbeat-form-times");
+const heartbeatFormTimesRows = $("heartbeat-form-times-rows");
+const heartbeatFormAddTime = $("heartbeat-form-add-time");
+const heartbeatFormSchedulePreview = $("heartbeat-form-schedule-preview");
 const heartbeatFormTask = $("heartbeat-form-task");
 const heartbeatFormVaultPaths = $("heartbeat-form-vault-paths");
 const heartbeatFormEnabled = $("heartbeat-form-enabled");
@@ -1181,7 +1187,13 @@ function renderHeartbeatRow(heartbeat) {
     : "never run";
   const workflow = heartbeat.workflowId ? allWorkflows.find((w) => w.id === heartbeat.workflowId) : null;
   const target = workflow ? `workflow: ${workflow.name}` : `${persona?.name || "?"} → ${conversation?.name || "?"}`;
-  meta.textContent = `${heartbeat.schedule} · ${target} · ${last}`;
+  // A cron schedule reads as "08:00, Mon–Fri" in the list rather than as the
+  // raw expression -- the expression is still there in the form for anyone
+  // who wants it, but this line is a glance, not a spec.
+  const scheduleLabel = String(heartbeat.schedule || "").startsWith("cron@")
+    ? AgoraCron.describeCron(heartbeat.schedule.slice("cron@".length)) || heartbeat.schedule
+    : heartbeat.schedule;
+  meta.textContent = `${scheduleLabel} · ${target} · ${last}`;
   main.append(name, meta);
   row.appendChild(main);
 
@@ -1228,12 +1240,118 @@ heartbeatStudioAdd.addEventListener("click", () => openHeartbeatForm(null));
 heartbeatFormConversation.addEventListener("change", () => {
   heartbeatFormNewConversationName.hidden = heartbeatFormConversation.value !== NEW_CHANNEL_SENTINEL;
 });
+// --- Schedule picker (cron) -------------------------------------------------
+// "days" and "cron" are two views of one value: both save a cron@ schedule,
+// and the chips compile to exactly what the raw box would take. The preview
+// under both is read back OUT of the compiled expression, never off what was
+// clicked -- cron is a cross product of minutes and hours, so asking for 08:00
+// and 20:30 really does fire four times, and the form has to say so.
+// Monday first: Edvard reads a week that way, cron numbers it Sunday-first.
+const DAY_CHIPS = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]];
+let pickedDays = new Set([1, 2, 3, 4, 5, 6, 0]);
+let pickedTimes = ["08:00"];
+
+function renderDayChips() {
+  heartbeatFormDays.innerHTML = "";
+  for (const [value, label] of DAY_CHIPS) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "day-chip";
+    chip.textContent = label;
+    chip.setAttribute("aria-pressed", String(pickedDays.has(value)));
+    chip.addEventListener("click", () => {
+      if (pickedDays.has(value)) pickedDays.delete(value);
+      else pickedDays.add(value);
+      // Every day off would compile to a schedule that never fires, so the
+      // last chip refuses to turn itself off rather than saving a dead one.
+      if (!pickedDays.size) pickedDays.add(value);
+      chip.setAttribute("aria-pressed", String(pickedDays.has(value)));
+      refreshSchedulePreview();
+    });
+    heartbeatFormDays.appendChild(chip);
+  }
+}
+
+function renderTimeRows() {
+  heartbeatFormTimesRows.innerHTML = "";
+  pickedTimes.forEach((time, index) => {
+    const row = document.createElement("div");
+    row.className = "time-row";
+    const input = document.createElement("input");
+    input.type = "time";
+    input.value = time;
+    input.addEventListener("change", () => {
+      pickedTimes[index] = input.value;
+      refreshSchedulePreview();
+    });
+    row.appendChild(input);
+    if (pickedTimes.length > 1) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "✕";
+      remove.setAttribute("aria-label", `Remove ${time}`);
+      remove.addEventListener("click", () => {
+        pickedTimes.splice(index, 1);
+        renderTimeRows();
+        refreshSchedulePreview();
+      });
+      row.appendChild(remove);
+    }
+    heartbeatFormTimesRows.appendChild(row);
+  });
+}
+
+/** The cron expression the form would save right now, whichever view is open. */
+function currentCronExpr() {
+  return heartbeatFormScheduleType.value === "cron"
+    ? heartbeatFormCron.value.trim()
+    : AgoraCron.compileCron([...pickedDays], pickedTimes);
+}
+
+function refreshSchedulePreview() {
+  const cronMode = heartbeatFormScheduleType.value === "cron";
+  const daysMode = heartbeatFormScheduleType.value === "days";
+  heartbeatFormSchedulePreview.hidden = !(cronMode || daysMode);
+  if (heartbeatFormSchedulePreview.hidden) return;
+  const expr = currentCronExpr();
+  const description = AgoraCron.describeCron(expr);
+  heartbeatFormSchedulePreview.classList.toggle("schedule-preview-bad", !description);
+  heartbeatFormSchedulePreview.textContent = description
+    ? `Runs ${description} — ${expr}`
+    : "Not a schedule yet: five fields, minute hour day-of-month month day-of-week.";
+}
+
+heartbeatFormAddTime.addEventListener("click", () => {
+  pickedTimes.push("12:00");
+  renderTimeRows();
+  refreshSchedulePreview();
+});
+heartbeatFormCron.addEventListener("input", refreshSchedulePreview);
+
 heartbeatFormScheduleType.addEventListener("change", () => {
-  const daily = heartbeatFormScheduleType.value === "daily";
-  heartbeatFormTime.hidden = !daily;
-  heartbeatFormInterval.hidden = daily;
-  heartbeatFormUnit.hidden = daily;
-  heartbeatFormAnchorRow.hidden = daily;
+  const type = heartbeatFormScheduleType.value;
+  heartbeatFormTime.hidden = type !== "daily";
+  heartbeatFormInterval.hidden = type !== "every";
+  heartbeatFormUnit.hidden = type !== "every";
+  heartbeatFormAnchorRow.hidden = type !== "every";
+  heartbeatFormCron.hidden = type !== "cron";
+  heartbeatFormDays.hidden = type !== "days";
+  heartbeatFormTimes.hidden = type !== "days";
+  // Switching between the two cron views carries the schedule across instead
+  // of resetting it, so trying the raw box and coming back is free.
+  if (type === "cron" && !heartbeatFormCron.value.trim()) {
+    heartbeatFormCron.value = AgoraCron.compileCron([...pickedDays], pickedTimes);
+  }
+  if (type === "days") {
+    const decoded = AgoraCron.decodeCron(heartbeatFormCron.value.trim());
+    if (decoded) {
+      pickedDays = new Set(decoded.days);
+      pickedTimes = decoded.times;
+    }
+    renderDayChips();
+    renderTimeRows();
+  }
+  refreshSchedulePreview();
 });
 heartbeatFormAnchorEnabled.addEventListener("change", () => {
   heartbeatFormAnchor.disabled = !heartbeatFormAnchorEnabled.checked;
@@ -1279,6 +1397,18 @@ function openHeartbeatForm(heartbeat) {
       heartbeatFormScheduleType.value = "daily";
       const time = schedule.slice("daily@".length);
       heartbeatFormTime.value = time.length === 4 ? `0${time}` : time;
+    } else if (schedule.startsWith("cron@")) {
+      const expr = schedule.slice("cron@".length);
+      heartbeatFormCron.value = expr;
+      // Only open the picker on a schedule it can express without losing
+      // anything -- decodeCron says no to a day-of-month or month restriction,
+      // and those get the raw box so a save can't quietly drop them.
+      const decoded = AgoraCron.decodeCron(expr);
+      heartbeatFormScheduleType.value = decoded ? "days" : "cron";
+      if (decoded) {
+        pickedDays = new Set(decoded.days);
+        pickedTimes = decoded.times;
+      }
     } else {
       heartbeatFormScheduleType.value = "every";
       const [amount, anchor] = schedule.slice("every@".length).split("@");
@@ -1291,7 +1421,12 @@ function openHeartbeatForm(heartbeat) {
     heartbeatFormScheduleType.value = "daily";
     heartbeatFormTime.value = "08:00";
     heartbeatFormAnchorEnabled.checked = false;
+    heartbeatFormCron.value = "";
+    pickedDays = new Set([1, 2, 3, 4, 5, 6, 0]);
+    pickedTimes = ["08:00"];
   }
+  renderDayChips();
+  renderTimeRows();
   heartbeatFormAnchor.disabled = !heartbeatFormAnchorEnabled.checked;
   heartbeatFormScheduleType.dispatchEvent(new Event("change"));
   heartbeatFormTask.value = heartbeat?.task || "";
@@ -1317,10 +1452,23 @@ heartbeatForm.addEventListener("submit", async (event) => {
     return;
   }
   const anchor = heartbeatFormAnchorEnabled.checked ? `@${heartbeatFormAnchor.value}` : "";
-  const schedule =
-    heartbeatFormScheduleType.value === "daily"
-      ? `daily@${heartbeatFormTime.value}`
-      : `every@${heartbeatFormInterval.value}${heartbeatFormUnit.value}${anchor}`;
+  const scheduleType = heartbeatFormScheduleType.value;
+  let schedule;
+  if (scheduleType === "daily") {
+    schedule = `daily@${heartbeatFormTime.value}`;
+  } else if (scheduleType === "days" || scheduleType === "cron") {
+    const expr = currentCronExpr();
+    if (!AgoraCron.isValidCron(expr)) {
+      // The server rejects this too, but with a 400 the form would show as a
+      // generic save failure -- say which part is wrong while it's on screen.
+      heartbeatFormStatus.textContent =
+        "That cron expression needs five fields: minute hour day-of-month month day-of-week.";
+      return;
+    }
+    schedule = `cron@${expr}`;
+  } else {
+    schedule = `every@${heartbeatFormInterval.value}${heartbeatFormUnit.value}${anchor}`;
+  }
   const body = {
     name,
     personaId: heartbeatFormPersona.value,
