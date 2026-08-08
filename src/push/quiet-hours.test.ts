@@ -72,9 +72,9 @@ describe("isQuiet", () => {
 });
 
 describe("loadConfig quiet hours", () => {
-  it("defaults to 23:00-07:00 Oslo with no env set", () => {
+  it("defaults to 22:00-07:00 Oslo with no env set", () => {
     const config = loadConfig({} as NodeJS.ProcessEnv);
-    expect(config.quietHours).toEqual({ startMinute: 1380, endMinute: 420 });
+    expect(config.quietHours).toEqual({ startMinute: 1320, endMinute: 420 });
     expect(config.quietHoursTimeZone).toBe("Europe/Oslo");
   });
 
