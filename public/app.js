@@ -161,6 +161,9 @@ const heartbeatFormScheduleType = $("heartbeat-form-schedule-type");
 const heartbeatFormTime = $("heartbeat-form-time");
 const heartbeatFormInterval = $("heartbeat-form-interval");
 const heartbeatFormUnit = $("heartbeat-form-unit");
+const heartbeatFormAnchorRow = $("heartbeat-form-anchor-row");
+const heartbeatFormAnchorEnabled = $("heartbeat-form-anchor-enabled");
+const heartbeatFormAnchor = $("heartbeat-form-anchor");
 const heartbeatFormTask = $("heartbeat-form-task");
 const heartbeatFormVaultPaths = $("heartbeat-form-vault-paths");
 const heartbeatFormEnabled = $("heartbeat-form-enabled");
@@ -1230,6 +1233,10 @@ heartbeatFormScheduleType.addEventListener("change", () => {
   heartbeatFormTime.hidden = !daily;
   heartbeatFormInterval.hidden = daily;
   heartbeatFormUnit.hidden = daily;
+  heartbeatFormAnchorRow.hidden = daily;
+});
+heartbeatFormAnchorEnabled.addEventListener("change", () => {
+  heartbeatFormAnchor.disabled = !heartbeatFormAnchorEnabled.checked;
 });
 
 function openHeartbeatForm(heartbeat) {
@@ -1274,14 +1281,18 @@ function openHeartbeatForm(heartbeat) {
       heartbeatFormTime.value = time.length === 4 ? `0${time}` : time;
     } else {
       heartbeatFormScheduleType.value = "every";
-      const amount = schedule.slice("every@".length);
+      const [amount, anchor] = schedule.slice("every@".length).split("@");
       heartbeatFormInterval.value = amount.slice(0, -1);
       heartbeatFormUnit.value = amount.slice(-1);
+      heartbeatFormAnchorEnabled.checked = Boolean(anchor);
+      if (anchor) heartbeatFormAnchor.value = anchor.length === 4 ? `0${anchor}` : anchor;
     }
   } else {
     heartbeatFormScheduleType.value = "daily";
     heartbeatFormTime.value = "08:00";
+    heartbeatFormAnchorEnabled.checked = false;
   }
+  heartbeatFormAnchor.disabled = !heartbeatFormAnchorEnabled.checked;
   heartbeatFormScheduleType.dispatchEvent(new Event("change"));
   heartbeatFormTask.value = heartbeat?.task || "";
   heartbeatFormVaultPaths.value = (heartbeat?.vaultPaths || []).join("\n");
@@ -1305,10 +1316,11 @@ heartbeatForm.addEventListener("submit", async (event) => {
     heartbeatFormStatus.textContent = "New channel name is required.";
     return;
   }
+  const anchor = heartbeatFormAnchorEnabled.checked ? `@${heartbeatFormAnchor.value}` : "";
   const schedule =
     heartbeatFormScheduleType.value === "daily"
       ? `daily@${heartbeatFormTime.value}`
-      : `every@${heartbeatFormInterval.value}${heartbeatFormUnit.value}`;
+      : `every@${heartbeatFormInterval.value}${heartbeatFormUnit.value}${anchor}`;
   const body = {
     name,
     personaId: heartbeatFormPersona.value,

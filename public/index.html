@@ -891,8 +891,13 @@
           <option value="h">hours</option>
           <option value="m">minutes</option>
         </select>
+        <label class="checkbox-row" id="heartbeat-form-anchor-row" hidden>
+          <input type="checkbox" id="heartbeat-form-anchor-enabled" /> starting at
+          <input id="heartbeat-form-anchor" type="time" value="12:00" disabled />
+        </label>
       </div>
-      <p class="modal-hint">Daily times are Europe/Oslo.</p>
+      <p class="modal-hint">Daily times are Europe/Oslo. Without a starting time,
+        "every" counts from when the last run finished, so the times drift.</p>
       <h3>Task for the triggered turn</h3>
       <textarea id="heartbeat-form-task" placeholder="Prompt layered on top of the persona for this trigger (e.g. 'Ask how yesterday's training went and set today's focus.')" rows="6"></textarea>
       <h3>Vault context (injected fresh on every run)</h3>

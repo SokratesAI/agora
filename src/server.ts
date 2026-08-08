@@ -12,7 +12,7 @@ import type {
 } from "./chat/conversation-store.js";
 import type { PersonaStore, PersonaCapabilities, Persona } from "./chat/persona-store.js";
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
-import { SCHEDULE_RE } from "./chat/heartbeat-store.js";
+import { isValidSchedule, SCHEDULE_ERROR } from "./chat/heartbeat-store.js";
 import type { WorkflowStore, WorkflowUpdate, Step } from "./chat/workflow-store.js";
 import { wouldCreateCycle } from "./chat/workflow-store.js";
 import type { AuditStore } from "./chat/audit-store.js";
@@ -296,8 +296,8 @@ function registerCreateHeartbeatRoute(app: Express, deps: ServerDeps): void {
       res.status(400).json({ error: "name is required" });
       return;
     }
-    if (typeof body.schedule !== "string" || !SCHEDULE_RE.test(body.schedule)) {
-      res.status(400).json({ error: "schedule must be daily@HH:MM or every@N[m|h]" });
+    if (typeof body.schedule !== "string" || !isValidSchedule(body.schedule)) {
+      res.status(400).json({ error: SCHEDULE_ERROR });
       return;
     }
     if (typeof body.personaId !== "string") {
@@ -806,8 +806,8 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   app.patch("/heartbeats/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
-    if (body.schedule !== undefined && !SCHEDULE_RE.test(body.schedule as string)) {
-      res.status(400).json({ error: "schedule must be daily@HH:MM or every@N[m|h]" });
+    if (body.schedule !== undefined && !isValidSchedule(body.schedule as string)) {
+      res.status(400).json({ error: SCHEDULE_ERROR });
       return;
     }
     if (body.personaId !== undefined && !(await personas.get(body.personaId as string))) {

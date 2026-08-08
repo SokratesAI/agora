@@ -12,7 +12,8 @@ export interface Heartbeat {
   name: string;
   personaId: string;
   conversationId: string;
-  /** "daily@HH:MM" (Europe/Oslo) or "every@N[m|h]" — validated at the route. */
+  /** "daily@HH:MM" (Europe/Oslo), "every@N[m|h]", or "every@N[m|h]@HH:MM"
+   * — validated at the route by isValidSchedule. */
   schedule: string;
   task: string;
   /** Decisions/0009 — when set, firing runs this Workflow's steps
@@ -63,7 +64,32 @@ export interface HeartbeatUpdate {
   conversationRetention?: number;
 }
 
-export const SCHEDULE_RE = /^(daily@([01]?\d|2[0-3]):[0-5]\d|every@\d+[mh])$/;
+const HHMM = "([01]?\\d|2[0-3]):[0-5]\\d";
+export const SCHEDULE_RE = new RegExp(
+  `^(daily@${HHMM}|every@\\d+[mh](@${HHMM})?)$`,
+);
+
+export const SCHEDULE_ERROR =
+  "schedule must be daily@HH:MM, every@N[m|h], or every@N[m|h]@HH:MM " +
+  "(anchored — the interval must divide 24h evenly)";
+
+/** An anchored interval ("every@6h@12:00" = 12:00, 18:00, 00:00, 06:00) only
+ * has a stable meaning when the interval divides 24h. Each day lays its slots
+ * out from the anchor, so with a non-dividing interval the two sides of
+ * midnight disagree — "every@7h@12:00" is 05:00/12:00/19:00, but at 00:30 the
+ * last slot reads as 22:00 the night before, which did not exist at 23:30, so
+ * it fires an extra time every midnight. Rejecting it here is what lets the
+ * runner keep that logic to three lines — see last_anchored_occurrence in
+ * agora-persona-runner's turns.py. */
+export function isValidSchedule(schedule: string): boolean {
+  if (!SCHEDULE_RE.test(schedule)) return false;
+  if (!schedule.startsWith("every@")) return true;
+  const [amount, anchor] = schedule.slice("every@".length).split("@");
+  if (anchor === undefined) return true;
+  const value = Number(amount.slice(0, -1));
+  const minutes = amount.endsWith("h") ? value * 60 : value;
+  return minutes > 0 && 1440 % minutes === 0;
+}
 
 export class HeartbeatStore {
   private readonly dir: string;
