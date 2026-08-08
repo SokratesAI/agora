@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import pino from "pino";
 import type { Express } from "express";
@@ -37,6 +37,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     vapidSubject: "mailto:test@example.com",
     runnerUrl: undefined,
     agentToken: undefined,
+    quietHours: undefined,
+    quietHoursTimeZone: "Europe/Oslo",
     ...overrides,
   };
 }
@@ -1254,6 +1256,91 @@ describe("agora internal app", () => {
       .send({ text: "final chunk", sender: "Gemini" });
     expect(res.status).toBe(200);
     expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 2026-08-08: quiet hours. Nova's cycle went from 4 a day to 20, which is
+  // ~7 replies between 22:00 and 08:00. The reply must still be written and
+  // still land in the conversation -- only the phone buzz is withheld.
+  // Only Date is faked: supertest needs real timers to complete a request.
+  // -------------------------------------------------------------------------
+
+  describe("quiet hours", () => {
+    const night = { startMinute: 23 * 60, endMinute: 7 * 60 };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function atOsloTime(utcIso: string) {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(utcIso));
+    }
+
+    it("records the message but withholds the push inside the window", async () => {
+      const quiet = await makeDeps({ quietHours: night });
+      const quietApp = createInternalApp(quiet);
+      await quiet.store.save(validSubscription);
+      const conversation = await quiet.conversations.create("Night", "");
+      atOsloTime("2026-08-08T21:30:00Z"); // 23:30 Oslo
+
+      const res = await request(quietApp)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "cycle 44 done", sender: "Nova" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("recorded");
+      expect(res.body.quietHours).toBe(true);
+      expect(quiet.webPush.sendNotification).not.toHaveBeenCalled();
+      // The whole point: it is there to read in the morning.
+      expect((await quiet.conversations.get(conversation.id))?.messages).toMatchObject([
+        { sender: "Nova", text: "cycle 44 done" },
+      ]);
+    });
+
+    it("pushes normally outside the window", async () => {
+      const quiet = await makeDeps({ quietHours: night });
+      const quietApp = createInternalApp(quiet);
+      await quiet.store.save(validSubscription);
+      const conversation = await quiet.conversations.create("Day", "");
+      atOsloTime("2026-08-08T12:00:00Z"); // 14:00 Oslo
+
+      const res = await request(quietApp)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "afternoon", sender: "Nova" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("sent");
+      expect(quiet.webPush.sendNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("withholds the legacy POST /notify push too", async () => {
+      const quiet = await makeDeps({ quietHours: night });
+      const quietApp = createInternalApp(quiet);
+      await quiet.store.save(validSubscription);
+      atOsloTime("2026-08-09T02:00:00Z"); // 04:00 Oslo
+
+      const res = await request(quietApp).post("/notify").send({ persona: "Marcus", text: "yo" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.quietHours).toBe(true);
+      expect(quiet.webPush.sendNotification).not.toHaveBeenCalled();
+      const main = await quiet.conversations.findByName("Main");
+      expect(main?.messages).toMatchObject([{ sender: "Marcus", text: "yo" }]);
+    });
+
+    it("pushes at any hour when quiet hours are switched off", async () => {
+      await deps.store.save(validSubscription); // deps has quietHours: undefined
+      const conversation = await deps.conversations.create("AlwaysOn", "");
+      atOsloTime("2026-08-08T23:30:00Z"); // 01:30 Oslo
+
+      const res = await request(app)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "still buzzing", sender: "Nova" });
+
+      expect(res.status).toBe(200);
+      expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ---------------------------------------------------------------------

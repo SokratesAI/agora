@@ -3,6 +3,7 @@ import multer from "multer";
 import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
+import { isQuiet } from "./push/quiet-hours.js";
 import type { MessageStore } from "./chat/message-store.js";
 import type {
   Conversation,
@@ -1345,6 +1346,14 @@ export function createInternalApp(deps: ServerDeps): Express {
       return;
     }
 
+    // Quiet hours: the reply is already appended above and will be waiting in
+    // the conversation. Only the phone buzz is withheld.
+    if (isQuiet(config.quietHours, config.quietHoursTimeZone)) {
+      logger.info({ conversationId: conversation.id, sender: speaker }, "quiet hours — push withheld");
+      res.status(200).json({ status: "recorded", quietHours: true, message });
+      return;
+    }
+
     const subscription = await store.load();
     if (!subscription) {
       res.status(404).json({ error: "no subscription registered yet", message });
@@ -1376,6 +1385,12 @@ export function createInternalApp(deps: ServerDeps): Express {
     const title = typeof persona === "string" && persona.length > 0 ? persona : "Agora";
     const main = await resolveMain(deps);
     const message = await conversations.appendMessage(main.id, title, text);
+
+    if (isQuiet(config.quietHours, config.quietHoursTimeZone)) {
+      logger.info({ conversationId: main.id, sender: title }, "quiet hours — push withheld");
+      res.status(200).json({ status: "recorded", quietHours: true, message });
+      return;
+    }
 
     const subscription = await store.load();
     if (!subscription) {
