@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { HeartbeatStore, SCHEDULE_RE } from "./heartbeat-store.js";
+import { HeartbeatStore, SCHEDULE_RE, isValidSchedule } from "./heartbeat-store.js";
 
 describe("HeartbeatStore", () => {
   let dir: string;
@@ -93,11 +93,36 @@ describe("HeartbeatStore", () => {
   });
 
   it("SCHEDULE_RE accepts the documented forms and rejects junk", () => {
-    for (const ok of ["daily@08:00", "daily@23:59", "daily@7:05", "every@30m", "every@2h"]) {
+    for (const ok of [
+      "daily@08:00", "daily@23:59", "daily@7:05", "every@30m", "every@2h",
+      "every@6h@12:00", "every@30m@00:00",
+    ]) {
       expect(ok).toMatch(SCHEDULE_RE);
     }
-    for (const bad of ["daily@24:00", "daily@8", "every@m", "every@30", "cron:* * * * *", ""]) {
+    for (const bad of [
+      "daily@24:00", "daily@8", "every@m", "every@30", "cron:* * * * *", "",
+      "every@6h@24:00", "every@6h@12", "daily@08:00@12:00", "every@6h@12:00@13:00",
+    ]) {
       expect(bad).not.toMatch(SCHEDULE_RE);
     }
+  });
+
+  it("isValidSchedule only anchors intervals that divide 24h evenly", () => {
+    // An anchor promises the same clock times every day. 7h can't keep that
+    // promise -- the runner lays slots out from midnight, so a non-dividing
+    // interval leaves a short wrap gap and fires an extra time at midnight.
+    for (const ok of ["every@6h@12:00", "every@1h@00:00", "every@12h@06:00", "every@90m@00:00"]) {
+      expect(isValidSchedule(ok)).toBe(true);
+    }
+    for (const bad of ["every@7h@12:00", "every@5h@12:00", "every@25m@12:00", "every@36h@12:00"]) {
+      expect(isValidSchedule(bad)).toBe(false);
+    }
+  });
+
+  it("isValidSchedule leaves unanchored and daily schedules alone", () => {
+    for (const ok of ["daily@08:00", "every@7h", "every@25m", "every@6h"]) {
+      expect(isValidSchedule(ok)).toBe(true);
+    }
+    expect(isValidSchedule("nonsense")).toBe(false);
   });
 });

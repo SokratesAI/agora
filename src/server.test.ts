@@ -631,6 +631,24 @@ describe("agora public app", () => {
     expect(res.body.heartbeat.enabled).toBe(true);
   });
 
+  it("accepts an anchored interval and rejects one that can't hold its clock time", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const base = { name: "Nova", personaId: persona.id, conversationId: conversation.id };
+
+    const good = await request(app).post("/heartbeats").send({ ...base, schedule: "every@6h@12:00" });
+    expect(good.status).toBe(201);
+    expect(good.body.heartbeat.schedule).toBe("every@6h@12:00");
+
+    const bad = await request(app).post("/heartbeats").send({ ...base, schedule: "every@7h@12:00" });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toContain("divide 24h");
+
+    const patched = await request(app)
+      .patch(`/heartbeats/${good.body.heartbeat.id}`)
+      .send({ schedule: "every@7h@12:00" });
+    expect(patched.status).toBe(400);
+  });
+
   it("POST /heartbeats/:id/run queues a forced run", async () => {
     const { persona, conversation } = await createHeartbeatFixtures();
     const created = await request(app).post("/heartbeats").send({
