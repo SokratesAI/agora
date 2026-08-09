@@ -143,4 +143,24 @@ export const MODEL_CATALOG: ModelOption[] = [
     supportsThinking: true,
     contextWindow: "1M",
   },
+  // Fable 5 was reachable through the raw API above but not through the
+  // CLI, so no tool-using persona could run on it. `claude --model
+  // claude-fable-5` works (verified live 2026-08-09), so this is only a
+  // catalog entry.
+  //
+  // Pick it for speed of a *single* answer, not to save quota. Measured
+  // 2026-08-09 on the identical prompt and 257KB input, cold session both
+  // times: Fable $2.47 / 106s / 10,353 output tokens, Opus 5 $0.71 / 59s /
+  // 5,770 output tokens -- 3.5x the cost and 1.8x the wall time for a
+  // same-length answer, because Fable's thinking is always on (see
+  // `supportsThinking` above) and so it pays to reason about even a
+  // mechanical task. It also has its own weekly cap on top of the shared
+  // one, which fills ~2.7x faster (agora-claude-bridge#23).
+  {
+    id: "claude-cli:claude-fable-5",
+    label: "Claude Fable 5 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: false,
+    contextWindow: "1M",
+  },
 ];
