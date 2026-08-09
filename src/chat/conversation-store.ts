@@ -160,13 +160,27 @@ export const DEFAULT_STICKY_FALLBACK = false;
  * callers (a persona's own poll loop) create-or-fetch by name so they don't
  * need to persist an id anywhere themselves.
  *
- * PoC scope: `list()` reads every conversation file to build the summary
- * list (no separate index) — fine at the handful of conversations this is
- * expected to hold; revisit if that stops being true.
+ * `list()` builds the summary list from the conversation files themselves
+ * rather than a separate index, but parses each one only when it has
+ * changed on disk (see `summaryCache`) — so the steady-state cost is one
+ * `stat` per conversation, not one full parse.
  */
 export class ConversationStore {
   private readonly dir: string;
   private writeQueue: Promise<unknown> = Promise.resolve();
+  /** Parsed summaries, keyed by file path, so `list()` only re-reads a
+   * conversation that actually changed. The "revisit if that stops being
+   * true" above came due: measured 2026-08-09, `list()` was parsing 66
+   * files / 15.4 MB to recover 66 timestamps, ~1.2s per call. The runner
+   * polls it every 5s and every UI action awaits it, which is where the
+   * server's ~220m idle CPU was going.
+   *
+   * The cache key is the file's size and mtime, so an edit made by
+   * anything at all invalidates it — `writeFile()` renames a freshly
+   * written temp file into place, which always moves both. `writeFile()`
+   * also drops the entry directly, so a write through this store is exact
+   * regardless of the filesystem's mtime granularity. */
+  private readonly summaryCache = new Map<string, { key: string; summary: ConversationSummary }>();
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, "conversations");
@@ -185,13 +199,19 @@ export class ConversationStore {
       throw err;
     }
     const summaries: ConversationSummary[] = [];
+    const present = new Set<string>();
     for (const entry of entries) {
       if (!entry.endsWith(".json")) continue;
-      const conversation = await this.readFile(path.join(this.dir, entry));
-      if (!conversation) continue;
-      const { messages, ...summary } = conversation;
-      const lastMessageAt = messages.length > 0 ? messages[messages.length - 1].ts : null;
-      summaries.push({ ...summary, lastMessageAt });
+      const filePath = path.join(this.dir, entry);
+      const summary = await this.readSummary(filePath);
+      if (!summary) continue;
+      present.add(filePath);
+      // A fresh object per call, as callers have always got — the cached
+      // one is this store's own copy and must not escape.
+      summaries.push({ ...summary });
+    }
+    for (const cached of this.summaryCache.keys()) {
+      if (!present.has(cached)) this.summaryCache.delete(cached);
     }
     // Most recently active first; conversations with no messages yet sort
     // last rather than by creation order (Decisions/0004).
@@ -469,6 +489,30 @@ export class ConversationStore {
     return message;
   }
 
+  /** One conversation's summary, parsed only if the file changed since
+   * the last call. Returns the cached instance; `list()` copies it. */
+  private async readSummary(filePath: string): Promise<ConversationSummary | null> {
+    let key: string;
+    try {
+      const stat = await fs.stat(filePath, { bigint: true });
+      key = `${stat.size}:${stat.mtimeNs}`;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+    const cached = this.summaryCache.get(filePath);
+    if (cached && cached.key === key) return cached.summary;
+    const conversation = await this.readFile(filePath);
+    if (!conversation) return null;
+    const { messages, ...rest } = conversation;
+    const summary: ConversationSummary = {
+      ...rest,
+      lastMessageAt: messages.length > 0 ? messages[messages.length - 1].ts : null,
+    };
+    this.summaryCache.set(filePath, { key, summary });
+    return summary;
+  }
+
   private async readFile(filePath: string): Promise<Conversation | null> {
     try {
       const raw = await fs.readFile(filePath, "utf8");
@@ -503,5 +547,6 @@ export class ConversationStore {
       await handle.close();
     }
     await fs.rename(tmpPath, target);
+    this.summaryCache.delete(target);
   }
 }
