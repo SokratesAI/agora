@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -379,5 +379,123 @@ describe("ConversationStore", () => {
     expect(ok).toBe(true);
     const reloaded = await store.get(conversation.id);
     expect(reloaded?.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  // list() is called by the runner's poll loop every 5s and awaited by every
+  // UI action; before the summary cache it re-parsed every conversation file
+  // each time (measured live: 66 files, 15.4 MB, ~1.2s a call).
+  describe("list() summary caching", () => {
+    it("does not re-read a conversation file that has not changed", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      await store.create("One", "");
+      await store.create("Two", "");
+
+      const first = await store.list();
+      const spy = vi.spyOn(fs, "readFile");
+      try {
+        const second = await store.list();
+        expect(spy).not.toHaveBeenCalled();
+        expect(second).toEqual(first);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("re-reads only the conversation that changed", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const one = await store.create("One", "");
+      await store.create("Two", "");
+      await store.list();
+
+      await store.appendMessage(one.id, "Edvard", "hello");
+      const spy = vi.spyOn(fs, "readFile");
+      let summaries;
+      try {
+        summaries = await store.list();
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
+      }
+      const changed = summaries.find((c) => c.id === one.id);
+      expect(changed?.lastMessageAt).not.toBeNull();
+      expect(summaries.find((c) => c.name === "Two")?.lastMessageAt).toBeNull();
+    });
+
+    it("picks up a conversation file edited behind the store's back", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const conversation = await store.create("One", "");
+      await store.list();
+
+      const filePath = path.join(dir, "conversations", `${conversation.id}.json`);
+      const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+      raw.name = "Renamed externally";
+      raw.messages = [{ id: "m1", sender: "Edvard", text: "hi", ts: "2026-02-02T00:00:00.000Z" }];
+      await fs.writeFile(filePath, JSON.stringify(raw, null, 2));
+
+      const summaries = await store.list();
+      expect(summaries[0].name).toBe("Renamed externally");
+      expect(summaries[0].lastMessageAt).toBe("2026-02-02T00:00:00.000Z");
+    });
+
+    it("drops a deleted conversation from the list", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const one = await store.create("One", "");
+      await store.create("Two", "");
+      expect(await store.list()).toHaveLength(2);
+
+      expect(await store.delete(one.id)).toBe(true);
+      const summaries = await store.list();
+      expect(summaries.map((c) => c.name)).toEqual(["Two"]);
+    });
+
+    // The stat key alone would leave correctness resting on the data
+    // volume's mtime resolution, which this store has no way to check.
+    it("reflects a write even when the file's stat cannot distinguish it", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const one = await store.create("One", "");
+      await store.list();
+
+      const frozen = await fs.stat(path.join(dir, "conversations", `${one.id}.json`), {
+        bigint: true,
+      });
+      const spy = vi.spyOn(fs, "stat").mockResolvedValue(frozen as never);
+      try {
+        await store.appendMessage(one.id, "Edvard", "hello");
+        const summaries = await store.list();
+        expect(summaries[0].lastMessageAt).not.toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("forgets a deleted conversation instead of caching it forever", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const one = await store.create("One", "");
+      await store.create("Two", "");
+      const cache = (store as unknown as { summaryCache: Map<string, unknown> }).summaryCache;
+
+      await store.list();
+      expect(cache.size).toBe(2);
+      await store.delete(one.id);
+      await store.list();
+      expect(cache.size).toBe(1);
+    });
+
+    it("hands out an independent copy, so a caller cannot corrupt the cache", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      await store.create("One", "");
+
+      const first = await store.list();
+      first[0].name = "mutated by a caller";
+      const second = await store.list();
+      expect(second[0].name).toBe("One");
+    });
   });
 });
