@@ -487,3 +487,40 @@ describe("formatRunningFor", () => {
     expect(globalThis.formatRunningFor(new Date(Date.now() + 60000).toISOString())).toBe("");
   });
 });
+
+describe("subagent chips", () => {
+  // The bridge posts a subagent's launch and its finish under the same task
+  // id (bridge/activity.py SUBAGENT), so the existing call/result pairing
+  // folds a whole delegated run into one chip.
+  it("folds a subagent's launch and finish into one chip", () => {
+    const merged = globalThis.mergeToolResults([
+      call("subagent", "Explore \u00b7 Gather Nova opening state", "task_1"),
+      result("subagent", "task_1", "completed \u00b7 94,183 tokens \u00b7 37 tool calls"),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.detail).toBe("Explore \u00b7 Gather Nova opening state");
+    expect(merged[0].activity.output).toContain("94,183 tokens");
+  });
+
+  it("labels it as a subagent rather than showing the wire capability", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("subagent", "Explore \u00b7 Gather Nova opening state", "task_1"),
+    ]);
+    const [drawer] = drawers();
+    const label = toggleOf(drawer).textContent;
+    expect(label).toContain("Subagent");
+    expect(label).toContain("Gather Nova opening state");
+  });
+
+  it("shows a subagent's own tool calls, attributed to it", () => {
+    globalThis.renderMessages([
+      say("go"),
+      call("Bash", "\u21b3 Gather Nova opening state \u00b7 grep -rn foo", "toolu_child"),
+    ]);
+    const [drawer] = drawers();
+    const label = toggleOf(drawer).textContent;
+    expect(label).toContain("\u21b3 Gather Nova opening state");
+    expect(label).toContain("grep -rn foo");
+  });
+});

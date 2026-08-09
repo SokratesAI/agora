@@ -2008,6 +2008,12 @@ const ACTIVITY_CHIP_LABELS = {
   github_read: "Read GitHub",
   save_memory: "Saved memory",
   heartbeat: "Ran heartbeat",
+  // One chip for a whole subagent: the bridge posts its launch and its
+  // finish under the same task id, so mergeToolResults folds them together
+  // and the expanded body is what the subagent reported back, with what it
+  // cost. Everything the subagent did in between arrives as ordinary chips,
+  // labelled with a "↳" and its brief.
+  subagent: "Subagent",
 };
 
 // Narration = a persona's tool calls and its own thinking: everything it did
