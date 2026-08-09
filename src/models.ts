@@ -148,14 +148,21 @@ export const MODEL_CATALOG: ModelOption[] = [
   // claude-fable-5` works (verified live 2026-08-09), so this is only a
   // catalog entry.
   //
-  // Pick it for speed of a *single* answer, not to save quota. Measured
-  // 2026-08-09 on the identical prompt and 257KB input, cold session both
-  // times: Fable $2.47 / 106s / 10,353 output tokens, Opus 5 $0.71 / 59s /
-  // 5,770 output tokens -- 3.5x the cost and 1.8x the wall time for a
-  // same-length answer, because Fable's thinking is always on (see
-  // `supportsThinking` above) and so it pays to reason about even a
-  // mechanical task. It also has its own weekly cap on top of the shared
-  // one, which fills ~2.7x faster (agora-claude-bridge#23).
+  // Do NOT reach for this to save quota. Measured 2026-08-09 on the
+  // identical prompt and 257KB input, cold session both times: Fable
+  // $2.47 / 106s / 10,353 output tokens against Opus 5 $0.71 / 59s /
+  // 5,770 -- 3.5x the cost AND 1.8x the wall time for a same-length
+  // answer, i.e. worse on both axes at once. Cause is already stated
+  // above: Fable's thinking is always on and cannot be turned off (that
+  // is what `supportsThinking: false` means here, unlike Haiku), so it
+  // pays to reason even about a mechanical task. It also has its own
+  // weekly cap on top of the shared one, filling ~2.7x faster
+  // (agora-claude-bridge#23).
+  //
+  // That is one workload -- bulk summarisation of a large input, which is
+  // the shape that punishes always-on thinking hardest. Short prompts may
+  // well go the other way (a trivial one returned in 2.3s), but that has
+  // not been measured properly, so it is not a recommendation yet.
   {
     id: "claude-cli:claude-fable-5",
     label: "Claude Fable 5 (CLI)",
