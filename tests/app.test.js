@@ -188,8 +188,54 @@ describe("narration drawer", () => {
     expect(toggleOf(drawer).textContent).toContain("2 steps");
   });
 
+  // issues.md #48. The client asks for `?limit=200` and the server answers
+  // `slice(-200)`, so once a run outgrows that window every poll drops a
+  // message off the FRONT. The group's first message was its expanded-state
+  // key, so the key moved under the reader roughly once per poll and the
+  // drawer collapsed itself seconds after being opened. Replayed against
+  // Cycle 68's real 338-message conversation the old key changed on 119 of
+  // 120 consecutive polls.
+  it("stays open while the loaded window slides past its first message", () => {
+    const run = Array.from({ length: 12 }, (_, i) => chip("vault_read", `w${i}.md`));
+    // One message object reused across renders: a real poll returns the same
+    // message with the same id, and regenerating it here would move the anchor
+    // for reasons the server never would.
+    const anchorMessage = say("go");
+    const windowOf = (start) => [anchorMessage, ...run.slice(start, start + 6)];
+
+    globalThis.renderMessages(windowOf(0), true);
+    toggleOf(drawers()[0]).click();
+    expect(bodyOf(drawers()[0]).hidden).toBe(false);
+
+    // The reply anchoring the group is still loaded, but its own first, second
+    // and third chips have all fallen out of the window.
+    for (const start of [1, 2, 3]) {
+      globalThis.renderedKey = "";
+      globalThis.renderMessages(windowOf(start), true);
+      expect(bodyOf(drawers()[0]).hidden).toBe(false);
+    }
+  });
+
+  it("anchors a group to the message it follows, not to its own first message", () => {
+    const groups = globalThis.groupNarration([
+      chip("vault_read", "before-any-reply.md"),
+      say("first answer"),
+      chip("vault_read", "b.md"),
+    ]);
+    const [head, reply, tail] = groups;
+    // A group at the window's front has no preceding message and takes the
+    // sentinel; the one after the reply is anchored to that reply's id, which
+    // does not move when the window slides.
+    expect(head.anchor).toBe("#narration-head");
+    expect(tail.anchor).toBe(reply.messages[0].id);
+  });
+
+  // Starts on a message rather than mid-narration, which is what a whole
+  // conversation looks like: only a window that cut the front produces a
+  // group with nothing before it, and there can be at most one of those.
   it("keeps drawers independent -- opening one does not open the next", () => {
     globalThis.renderMessages([
+      say("go"),
       chip("vault_read", "a.md"),
       say("first answer"),
       chip("vault_read", "b.md"),
@@ -226,6 +272,58 @@ const call = (capability, detail, toolUseId) =>
   say("", { activity: { capability, detail, toolUseId } });
 const result = (capability, toolUseId, output, isError = false) =>
   say("", { activity: { capability, detail: "", toolUseId, output, isError } });
+
+// Edvard, issues.md #48: "does not count more steps, it actually goes
+// downwards to 117??". Nothing counts down -- but the drawer was reporting
+// the length of a sliding window, and that does. Each poll drops one message
+// off the front, and when the arriving message is a tool RESULT it merges
+// into its call instead of adding a chip, so the window's merged length falls
+// by one. Against Cycle 68's real conversation it went backwards 36 times.
+describe("narration step count under a windowed view", () => {
+  const stepsIn = (text) => Number(text.match(/(\d+)\+? steps?/)[1]);
+
+  it("is exact, with no '+', when the whole run is loaded", () => {
+    globalThis.renderMessages([
+      say("go"),
+      chip("vault_read", "a.md"),
+      chip("vault_read", "b.md"),
+    ]);
+    expect(toggleOf(drawers()[0]).textContent).toContain("2 steps");
+    expect(toggleOf(drawers()[0]).textContent).not.toContain("+");
+  });
+
+  it("reports a windowed count as a lower bound rather than as a fact", () => {
+    const run = Array.from({ length: 5 }, (_, i) => chip("vault_read", `t${i}.md`));
+    globalThis.renderMessages(run, true);
+    expect(toggleOf(drawers()[0]).textContent).toContain("5+ steps");
+  });
+
+  it("never counts downwards when the window slides", () => {
+    // Interleaved calls and results, because the merge is the whole mechanism:
+    // a window of plain chips has a constant merged length and would pass this
+    // test against the unfixed code. A result arriving costs the window one
+    // message off the front and adds no chip, so the count falls by one.
+    const run = [];
+    for (let i = 0; i < 40; i++) {
+      run.push(call("Bash", `cmd ${i}`, `toolu_${i}`), result("Bash", `toolu_${i}`, "ok"));
+    }
+    const width = 20;
+    const seen = [];
+    for (let start = 0; start + width <= run.length; start++) {
+      globalThis.renderedKey = "";
+      globalThis.renderMessages(run.slice(start, start + width), true);
+      seen.push(stepsIn(toggleOf(drawers()[0]).textContent));
+    }
+    expect(seen.length).toBeGreaterThan(10);
+    expect(seen.some((n, i) => i > 0 && n < seen[i - 1])).toBe(false);
+  });
+
+  it("says where the missing steps went instead of letting them look deleted", () => {
+    globalThis.renderMessages([chip("vault_read", "a.md")], true);
+    toggleOf(drawers()[0]).click();
+    expect(bodyOf(drawers()[0]).textContent).toContain("outside the loaded window");
+  });
+});
 
 describe("mergeToolResults", () => {
   it("folds a tool's output into the chip for the call that made it", () => {
