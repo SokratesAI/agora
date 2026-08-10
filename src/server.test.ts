@@ -1396,7 +1396,11 @@ async function rawGet(
             const raw = Buffer.concat(chunks);
             const encoding = res.headers["content-encoding"];
             const body =
-              encoding === "gzip" ? zlib.gunzipSync(raw).toString() : raw.toString();
+              encoding === "gzip"
+                ? zlib.gunzipSync(raw).toString()
+                : encoding === "br"
+                  ? zlib.brotliDecompressSync(raw).toString()
+                  : raw.toString();
             resolve({ status: res.statusCode ?? 0, encoding, bytes: raw.length, body });
           });
         },
@@ -1460,6 +1464,17 @@ describe("public app response compression", () => {
     const plain = await rawGet(app, path, "identity");
     expect(plain.encoding).toBeUndefined();
     expect(JSON.parse(plain.body).totalMessages).toBe(40);
+  });
+
+  it("gives a real browser Brotli, which is the path Edvard's phone takes", async () => {
+    // A browser offers `br` ahead of gzip and compression@1.8 honours it.
+    // This is the production path; the gzip tests above cover older clients.
+    const plain = await rawGet(app, path, "identity");
+    const br = await rawGet(app, path, "br, gzip, deflate");
+
+    expect(br.encoding).toBe("br");
+    expect(br.bytes).toBeLessThan(plain.bytes / 2);
+    expect(br.body).toBe(plain.body);
   });
 
   it("compresses the static frontend too, not just the API", async () => {
