@@ -1363,3 +1363,108 @@ describe("agora internal app", () => {
     expect(normal.body.message.thinking).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------
+// Response compression. The drawer polls ?limit=200 every 3s and a whole
+// cycle's window measured 165,725 bytes uncompressed against the live pod
+// (2026-08-10) -- that payload, not the drawer, is what makes showing
+// Edvard a whole cycle unaffordable. Nothing in front of this app
+// compresses; the Tailscale Ingress is a plain forwarder.
+// ---------------------------------------------------------------------
+
+/** Real socket, real bytes. supertest/superagent transparently inflates a
+ * gzip response, so it cannot see what actually crossed the wire -- and the
+ * whole point of this change is the wire. */
+async function rawGet(
+  app: Express,
+  path: string,
+  acceptEncoding: string,
+): Promise<{ status: number; encoding?: string; bytes: number; body: string }> {
+  const http = await import("node:http");
+  const zlib = await import("node:zlib");
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = http.request(
+        { port, path, method: "GET", headers: { "Accept-Encoding": acceptEncoding } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks);
+            const encoding = res.headers["content-encoding"];
+            const body =
+              encoding === "gzip" ? zlib.gunzipSync(raw).toString() : raw.toString();
+            resolve({ status: res.statusCode ?? 0, encoding, bytes: raw.length, body });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+describe("public app response compression", () => {
+  let deps: Awaited<ReturnType<typeof makeDeps>>;
+  let app: Express;
+  let path: string;
+
+  beforeEach(async () => {
+    deps = await makeDeps();
+    app = createPublicApp(deps);
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Bulky", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    // Prose, not a repeated character -- a run of one byte compresses ~1000x
+    // and would prove nothing about real message text.
+    for (let i = 0; i < 40; i++) {
+      await request(app)
+        .post(`/conversations/${id}/reply`)
+        .send({ text: `message ${i}: ${"the quick brown fox jumps over the lazy dog. ".repeat(12)}` });
+    }
+    path = `/conversations/${id}/messages?limit=200`;
+  });
+
+  afterEach(async () => {
+    await fs.rm(deps.dir, { recursive: true, force: true });
+  });
+
+  it("gzips a large JSON response when the client offers gzip, and shrinks it", async () => {
+    const plain = await rawGet(app, path, "identity");
+    const gzipped = await rawGet(app, path, "gzip");
+
+    expect(plain.encoding).toBeUndefined();
+    expect(gzipped.encoding).toBe("gzip");
+    expect(plain.bytes).toBeGreaterThan(10_000);
+    expect(gzipped.bytes).toBeLessThan(plain.bytes / 2);
+  });
+
+  it("loses nothing: the inflated body is byte-identical to the uncompressed one", async () => {
+    const plain = await rawGet(app, path, "identity");
+    const gzipped = await rawGet(app, path, "gzip");
+
+    expect(gzipped.status).toBe(200);
+    expect(gzipped.body).toBe(plain.body);
+    expect(JSON.parse(gzipped.body).messages).toHaveLength(40);
+  });
+
+  it("leaves a client that asks for identity alone -- this is what the runner sends", async () => {
+    // agora_runner/http_util.py builds requests with urllib, which defaults to
+    // `Accept-Encoding: identity`. The runner must keep getting plain bytes.
+    const plain = await rawGet(app, path, "identity");
+    expect(plain.encoding).toBeUndefined();
+    expect(JSON.parse(plain.body).totalMessages).toBe(40);
+  });
+
+  it("compresses the static frontend too, not just the API", async () => {
+    const gzipped = await rawGet(app, "/app.js", "gzip");
+    expect(gzipped.status).toBe(200);
+    expect(gzipped.encoding).toBe("gzip");
+  });
+});
