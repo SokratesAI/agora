@@ -769,3 +769,66 @@ describe("overlapping polls", () => {
     expect(thread.map((m) => m.text)).toEqual(["one", "two"]);
   });
 });
+
+// 2026-08-10, Edvard's hard rule in issues.md: the prepaid Anthropic balance
+// had $16 left and will not be refilled. The picker was actively working
+// against him — a two-way ternary written before claude-cli existed filed
+// every claude-cli model under the heading "Gemini", so the free
+// subscription models were hidden under the wrong provider while the ones
+// that spend real money sat under "Anthropic" with the cleaner names.
+describe("model picker labels", () => {
+  it("names each provider group, and no longer files Claude under Gemini", () => {
+    expect(globalThis.modelGroupLabel("claude-cli")).toBe("Claude (subscription)");
+    expect(globalThis.modelGroupLabel("claude-cli")).not.toMatch(/Gemini/);
+    expect(globalThis.modelGroupLabel("gemini")).toBe("Gemini");
+    expect(globalThis.modelGroupLabel("anthropic")).toMatch(/metered/);
+  });
+
+  it("falls back to the raw provider rather than mislabelling an unknown one", () => {
+    // The bug being fixed was precisely a fallback that guessed "Gemini"
+    // for anything unrecognised, so the fallback must not name a provider.
+    expect(globalThis.modelGroupLabel("some-future-provider")).toBe("some-future-provider");
+  });
+
+  it("marks a metered model on the option itself, not only on the group", () => {
+    // A collapsed <select> shows the option text alone, so the group
+    // heading is invisible exactly when you want to know what you picked.
+    expect(globalThis.modelOptionLabel({ label: "Claude Opus 5", metered: true }))
+      .toBe("Claude Opus 5 — metered");
+    expect(globalThis.modelOptionLabel({ label: "Claude Opus 5 (CLI)" }))
+      .toBe("Claude Opus 5 (CLI)");
+  });
+});
+
+// The reviewer's finding on this branch, and the more serious of the two:
+// relabelling the options changed nothing about which one is SELECTED. A
+// <select> with no value set shows its first option, and the catalog's first
+// entry is the metered Anthropic Haiku — so Edvard opening New Chat and
+// tapping Create without touching the dropdown billed the prepaid balance,
+// on the most common path there is.
+describe("model picker default selection", () => {
+  const known = new Map([
+    ["anthropic:claude-haiku-4-5-20251001", {}],
+    ["claude-cli:claude-haiku-4-5-20251001", {}],
+    ["gemini:gemini-3.6-flash", {}],
+  ]);
+
+  it("falls back to the server's default model, not to whatever is first", () => {
+    expect(globalThis.chosenModelValue("", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("claude-cli:claude-haiku-4-5-20251001");
+  });
+
+  it("keeps an existing selection over the default", () => {
+    expect(globalThis.chosenModelValue("gemini:gemini-3.6-flash", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("gemini:gemini-3.6-flash");
+  });
+
+  it("ignores a previous or default value the catalog no longer offers", () => {
+    // A retired model id must not be forced onto the select — that would
+    // set .value to something with no matching <option>, which silently
+    // resolves to empty and shows the first option again.
+    expect(globalThis.chosenModelValue("gemini:retired", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("claude-cli:claude-haiku-4-5-20251001");
+    expect(globalThis.chosenModelValue("", "anthropic:retired", known)).toBe("");
+  });
+});

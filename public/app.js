@@ -223,6 +223,7 @@ let currentDetail = null;
 let renderedKey = "";
 let modelCatalogById = new Map();
 let latestModels = [];
+let defaultModelId = "";
 let allConversations = [];
 let allPersonas = [];
 let sheetTargetId = null;
@@ -377,6 +378,7 @@ async function loadModelCatalog() {
   const { ok, data } = await api("GET", "/models");
   if (!ok) return;
   latestModels = data.models;
+  defaultModelId = data.defaultModel || "";
   modelCatalogById = new Map(data.models.map((m) => [m.id, m]));
   for (const select of [newChatModel, editModel, personaFormModel]) populateModelSelect(select);
   updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
@@ -386,6 +388,42 @@ async function loadModelCatalog() {
   updateClaudeCliStatelessVisibility(personaFormModel, personaFormClaudeCliStatelessRow, personaFormClaudeCliStateless);
 }
 
+// A two-way ternary written before claude-cli existed (2026-08-01) filed
+// every claude-cli model under the heading "Gemini" — so the five free
+// subscription Claude models were hidden under the wrong provider while the
+// five that spend the prepaid balance sat under "Anthropic" with the clean
+// names. Named per provider now, and the metered ones say so (2026-08-10,
+// Edvard's hard rule in issues.md).
+const PROVIDER_GROUP_LABELS = {
+  anthropic: "Anthropic API (metered — costs money)",
+  gemini: "Gemini",
+  "claude-cli": "Claude (subscription)",
+};
+
+// A <select> with no value set displays its FIRST option, and the catalog's
+// first entry is a metered Anthropic model — so opening New Chat and tapping
+// Create without touching the dropdown silently billed the prepaid balance.
+// Array position is not a default: fall back to the server's own
+// DEFAULT_MODEL, which /models now reports alongside the catalog so the two
+// cannot drift. `known` is passed in rather than read from module state so
+// this stays a pure decision.
+function chosenModelValue(previous, defaultId, known) {
+  if (previous && known.has(previous)) return previous;
+  if (defaultId && known.has(defaultId)) return defaultId;
+  return "";
+}
+
+function modelGroupLabel(provider) {
+  return PROVIDER_GROUP_LABELS[provider] || provider;
+}
+
+// Marked per option too, not just per group: a <select> collapsed to its
+// chosen value shows the option text alone, so the group heading is
+// invisible exactly when you most want to know what you picked.
+function modelOptionLabel(model) {
+  return model.metered ? `${model.label} — metered` : model.label;
+}
+
 function populateModelSelect(select) {
   const previous = select.value;
   select.innerHTML = "";
@@ -393,16 +431,17 @@ function populateModelSelect(select) {
   for (const model of latestModels) {
     if (!groups.has(model.provider)) {
       const group = document.createElement("optgroup");
-      group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
+      group.label = modelGroupLabel(model.provider);
       groups.set(model.provider, group);
       select.appendChild(group);
     }
     const option = document.createElement("option");
     option.value = model.id;
-    option.textContent = model.label;
+    option.textContent = modelOptionLabel(model);
     groups.get(model.provider).appendChild(option);
   }
-  if (previous && modelCatalogById.has(previous)) select.value = previous;
+  const chosen = chosenModelValue(previous, defaultModelId, modelCatalogById);
+  if (chosen) select.value = chosen;
 }
 
 function capabilityBadgeText(model) {
