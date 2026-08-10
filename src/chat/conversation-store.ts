@@ -149,7 +149,13 @@ export interface SearchResult {
 
 // Applied to conversations created before model/thinking/archived existed —
 // keeps old records loadable without a migration step.
-export const DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001";
+//
+// 2026-08-10: was `anthropic:claude-haiku-4-5-20251001`, i.e. any conversation
+// created without an explicit model silently billed the prepaid metered API.
+// Edvard's hard rule (issues.md) is that production never spends that balance,
+// so the default is now the identical model reached through the subscription.
+// Same model, same context window, no per-token cost.
+export const DEFAULT_MODEL = "claude-cli:claude-haiku-4-5-20251001";
 export const DEFAULT_THINKING = false;
 export const DEFAULT_ARCHIVED = false;
 export const DEFAULT_STICKY_FALLBACK = false;

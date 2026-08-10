@@ -12,6 +12,18 @@ export interface ModelOption {
    * only, no live capability grants yet (that's Decisions/0002, Phase 6/7).
    * Left undefined rather than guessed where not confidently known. */
   contextWindow?: string;
+  /** True when a turn on this model is billed per token against a prepaid
+   * balance, rather than covered by the flat subscription (2026-08-10,
+   * Edvard's hard rule in issues.md — that balance had $16 left and will
+   * not be refilled). The picker had no way to show this, and the labels
+   * pointed the wrong way: the metered "Claude Haiku 4.5" reads like the
+   * plain choice and the free one carries the technical "(CLI)" suffix.
+   *
+   * Deliberately left undefined on the Gemini entries rather than set to
+   * false — that key's billing status has not been measured, and guessing
+   * "free" here is exactly the mistake this field exists to prevent. The
+   * UI only marks `metered === true`. */
+  metered?: boolean;
 }
 
 // Current-generation models only — not every legacy/deprecated snapshot.
@@ -23,6 +35,7 @@ export const MODEL_CATALOG: ModelOption[] = [
     id: "anthropic:claude-haiku-4-5-20251001",
     label: "Claude Haiku 4.5",
     provider: "anthropic",
+    metered: true,
     supportsThinking: false,
     contextWindow: "200K",
   },
@@ -30,6 +43,7 @@ export const MODEL_CATALOG: ModelOption[] = [
     id: "anthropic:claude-sonnet-5",
     label: "Claude Sonnet 5",
     provider: "anthropic",
+    metered: true,
     supportsThinking: true,
     contextWindow: "1M",
   },
@@ -37,6 +51,7 @@ export const MODEL_CATALOG: ModelOption[] = [
     id: "anthropic:claude-opus-4-8",
     label: "Claude Opus 4.8",
     provider: "anthropic",
+    metered: true,
     supportsThinking: true,
     contextWindow: "1M",
   },
@@ -44,6 +59,7 @@ export const MODEL_CATALOG: ModelOption[] = [
     id: "anthropic:claude-opus-5",
     label: "Claude Opus 5",
     provider: "anthropic",
+    metered: true,
     supportsThinking: true,
     contextWindow: "1M",
   },
@@ -51,6 +67,7 @@ export const MODEL_CATALOG: ModelOption[] = [
     id: "anthropic:claude-fable-5",
     label: "Claude Fable 5",
     provider: "anthropic",
+    metered: true,
     supportsThinking: false,
     contextWindow: "1M",
   },

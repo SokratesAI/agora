@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { MODEL_CATALOG } from "./models.js";
+import { DEFAULT_MODEL } from "./chat/conversation-store.js";
 
 describe("MODEL_CATALOG", () => {
   it("gives every id a provider prefix matching its provider", () => {
@@ -31,5 +32,27 @@ describe("MODEL_CATALOG", () => {
       .filter((bare) => !cliIds.has(bare));
 
     expect(missing).toEqual([]);
+  });
+
+  // 2026-08-10, Edvard's hard rule in issues.md: "We must never use the
+  // metered api for other than testing... We only use the subscription based
+  // model for production code!" These pin the two halves of that — which
+  // models cost money, and that nothing reaches one of them by default.
+  it("marks every raw-API Anthropic model as metered and no CLI model as metered", () => {
+    for (const model of MODEL_CATALOG) {
+      if (model.provider === "anthropic") expect(model.metered).toBe(true);
+      if (model.provider === "claude-cli") expect(model.metered).toBeUndefined();
+    }
+  });
+
+  it("defaults new conversations to a model that is not metered", () => {
+    // This is the one that actually had teeth: DEFAULT_MODEL used to be
+    // `anthropic:claude-haiku-4-5-20251001`, so any conversation created
+    // without an explicit model silently billed the prepaid balance.
+    // conversation-store.test.ts compares against the DEFAULT_MODEL symbol,
+    // so it passes whatever the value is and cannot catch a regression here.
+    const chosen = MODEL_CATALOG.find((m) => m.id === DEFAULT_MODEL);
+    expect(chosen).toBeDefined();
+    expect(chosen?.metered).toBeUndefined();
   });
 });

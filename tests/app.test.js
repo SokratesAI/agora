@@ -769,3 +769,33 @@ describe("overlapping polls", () => {
     expect(thread.map((m) => m.text)).toEqual(["one", "two"]);
   });
 });
+
+// 2026-08-10, Edvard's hard rule in issues.md: the prepaid Anthropic balance
+// had $16 left and will not be refilled. The picker was actively working
+// against him — a two-way ternary written before claude-cli existed filed
+// every claude-cli model under the heading "Gemini", so the free
+// subscription models were hidden under the wrong provider while the ones
+// that spend real money sat under "Anthropic" with the cleaner names.
+describe("model picker labels", () => {
+  it("names each provider group, and no longer files Claude under Gemini", () => {
+    expect(globalThis.modelGroupLabel("claude-cli")).toBe("Claude (subscription)");
+    expect(globalThis.modelGroupLabel("claude-cli")).not.toMatch(/Gemini/);
+    expect(globalThis.modelGroupLabel("gemini")).toBe("Gemini");
+    expect(globalThis.modelGroupLabel("anthropic")).toMatch(/metered/);
+  });
+
+  it("falls back to the raw provider rather than mislabelling an unknown one", () => {
+    // The bug being fixed was precisely a fallback that guessed "Gemini"
+    // for anything unrecognised, so the fallback must not name a provider.
+    expect(globalThis.modelGroupLabel("some-future-provider")).toBe("some-future-provider");
+  });
+
+  it("marks a metered model on the option itself, not only on the group", () => {
+    // A collapsed <select> shows the option text alone, so the group
+    // heading is invisible exactly when you want to know what you picked.
+    expect(globalThis.modelOptionLabel({ label: "Claude Opus 5", metered: true }))
+      .toBe("Claude Opus 5 — metered");
+    expect(globalThis.modelOptionLabel({ label: "Claude Opus 5 (CLI)" }))
+      .toBe("Claude Opus 5 (CLI)");
+  });
+});

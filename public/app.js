@@ -386,6 +386,29 @@ async function loadModelCatalog() {
   updateClaudeCliStatelessVisibility(personaFormModel, personaFormClaudeCliStatelessRow, personaFormClaudeCliStateless);
 }
 
+// A two-way ternary written before claude-cli existed (2026-08-01) filed
+// every claude-cli model under the heading "Gemini" — so the five free
+// subscription Claude models were hidden under the wrong provider while the
+// five that spend the prepaid balance sat under "Anthropic" with the clean
+// names. Named per provider now, and the metered ones say so (2026-08-10,
+// Edvard's hard rule in issues.md).
+const PROVIDER_GROUP_LABELS = {
+  anthropic: "Anthropic API (metered — costs money)",
+  gemini: "Gemini",
+  "claude-cli": "Claude (subscription)",
+};
+
+function modelGroupLabel(provider) {
+  return PROVIDER_GROUP_LABELS[provider] || provider;
+}
+
+// Marked per option too, not just per group: a <select> collapsed to its
+// chosen value shows the option text alone, so the group heading is
+// invisible exactly when you most want to know what you picked.
+function modelOptionLabel(model) {
+  return model.metered ? `${model.label} — metered` : model.label;
+}
+
 function populateModelSelect(select) {
   const previous = select.value;
   select.innerHTML = "";
@@ -393,13 +416,13 @@ function populateModelSelect(select) {
   for (const model of latestModels) {
     if (!groups.has(model.provider)) {
       const group = document.createElement("optgroup");
-      group.label = model.provider === "anthropic" ? "Anthropic" : "Gemini";
+      group.label = modelGroupLabel(model.provider);
       groups.set(model.provider, group);
       select.appendChild(group);
     }
     const option = document.createElement("option");
     option.value = model.id;
-    option.textContent = model.label;
+    option.textContent = modelOptionLabel(model);
     groups.get(model.provider).appendChild(option);
   }
   if (previous && modelCatalogById.has(previous)) select.value = previous;
