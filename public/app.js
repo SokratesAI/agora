@@ -229,10 +229,14 @@ let sheetTargetId = null;
 let editLinks = [];
 let editingMessageId = null;
 let lastRenderedMessages = [];
-// Which narration drawers the reader has opened, keyed by the id of the
-// group's first message. Survives the 3s re-render; deliberately not
+// Which narration drawers the reader has opened, keyed by the group's anchor
+// (see groupNarration). Survives the 3s re-render; deliberately not
 // persisted across reloads — "hidden by default" is the whole point.
 const expandedNarrationGroups = new Set();
+// Highest step count ever seen for a narration group, by anchor. Only
+// consulted for a group the server truncated, where the window's own length
+// is a lower bound that jitters rather than a fact (issues.md #48).
+const narrationStepHighWater = new Map();
 let messageActionTarget = null;
 let personaFormEditId = null;
 let heartbeatFormEditId = null;
@@ -1942,7 +1946,12 @@ async function fetchMessages() {
   renderMessages(data.messages);
 }
 
-function renderMessages(messages) {
+function renderMessages(
+  messages,
+  // Defaulted rather than read inline so a test can render a windowed view;
+  // every production call site keeps the currentDetail-derived answer.
+  windowed = (currentDetail?.totalMessages ?? messages.length) > messages.length,
+) {
   lastRenderedMessages = messages;
   const key = `${currentConversationId}:${messages
     .map((m) => `${m.id}:${m.text.length}:${m.forgotten ? 1 : 0}`)
@@ -1965,13 +1974,16 @@ function renderMessages(messages) {
   } else {
     const visible = mergeToolResults(messages);
     const last = visible[visible.length - 1];
-    for (const group of groupNarration(visible)) {
+    // Only the group at the window's front can be missing anything: everything
+    // after it arrived whole.
+    const groups = groupNarration(visible);
+    groups.forEach((group, i) => {
       messagesEl.appendChild(
         group.narration
-          ? renderNarrationGroup(group)
+          ? renderNarrationGroup(group, windowed && i === 0)
           : renderMessageBlock(group.messages[0], group.messages[0] === last),
       );
-    }
+    });
   }
   updateRetryBanner(messages);
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -2080,13 +2092,27 @@ function mergeToolResults(messages) {
 // stays exactly as it rendered before. Consecutive is the right unit: it
 // keeps the narration attached to the reply it produced, rather than
 // hoisting a conversation's worth of tool calls into one lump at the top.
+// A group's identity is the message it FOLLOWS, never its own first message.
+// The client renders a sliding window (`?limit=` -> `slice(-limit)` server
+// side), so once a live run outgrows that window its first message changes on
+// almost every poll while the group is plainly still the same drawer. Keying
+// on it meant the expanded-state lookup missed on 119 of 120 consecutive
+// polls, and the drawer collapsed itself within seconds of being opened —
+// Edvard, issues.md #48: "It closes almost immediately when i open it".
+// A group at the window's front has no preceding message and anchors to a
+// sentinel instead; if the real anchor later falls out of the window the key
+// flips to that sentinel exactly once, rather than on every poll.
+const NARRATION_HEAD_ANCHOR = "#narration-head";
+
 function groupNarration(messages) {
   const groups = [];
+  let anchor = NARRATION_HEAD_ANCHOR;
   for (const message of messages) {
     const narration = isNarration(message);
     const open = groups[groups.length - 1];
     if (narration && open?.narration) open.messages.push(message);
-    else groups.push({ narration, messages: [message] });
+    else groups.push({ narration, messages: [message], anchor });
+    if (!narration) anchor = message.id;
   }
   return groups;
 }
@@ -2106,14 +2132,30 @@ function narrationStepLabel(message) {
 // "displayed after the process is finished... they serve no purpose other
 // than hindsight logging" was the original complaint. So it shows the count
 // AND the newest step, both of which change as the run goes.
-function narrationSummary(messages) {
-  const n = messages.length;
-  return `${n} step${n === 1 ? "" : "s"} · ${narrationStepLabel(messages[n - 1])}`;
+// `truncated` means the server sent a window, not the whole run, so the group
+// really does have more steps than we are holding. The window's own length is
+// then a lower bound that jitters DOWNWARDS: each poll drops a message off the
+// front and, when the arriving message is a tool result, merges it into a call
+// rather than adding a chip — so the count falls by one. Replayed against
+// Cycle 68's real 338-message conversation it peaked at 125 and went backwards
+// 36 times, which is Edvard's "does not count more steps, it actually goes
+// downwards to 117??". The best honest number is the largest count seen so far.
+function narrationSummary(messages, { truncated = false, anchor } = {}) {
+  let n = messages.length;
+  if (truncated && anchor !== undefined) {
+    n = Math.max(n, narrationStepHighWater.get(anchor) ?? 0);
+    narrationStepHighWater.set(anchor, n);
+  }
+  const count = truncated ? `${n}+ steps` : `${n} step${n === 1 ? "" : "s"}`;
+  return `${count} · ${narrationStepLabel(messages[messages.length - 1])}`;
 }
 
-function renderNarrationGroup(group) {
-  const { messages } = group;
-  const key = messages[0].id;
+function renderNarrationGroup(group, truncated = false) {
+  const { messages, anchor } = group;
+  // Scoped to the conversation: unlike a message id, the head sentinel is the
+  // same string in every thread, so an unscoped key would carry one thread's
+  // open drawer and step count over to the next.
+  const key = `${currentConversationId}:${anchor}`;
   const wrap = document.createElement("div");
   wrap.className = "msg-narration";
 
@@ -2124,11 +2166,18 @@ function renderNarrationGroup(group) {
   chevron.className = "msg-narration-chevron";
   const summary = document.createElement("span");
   summary.className = "msg-narration-summary";
-  summary.textContent = narrationSummary(messages);
+  summary.textContent = narrationSummary(messages, { truncated, anchor: key });
   toggle.append(chevron, summary);
 
   const body = document.createElement("div");
   body.className = "msg-narration-body";
+  if (truncated) {
+    // Say where the missing steps went rather than letting them look deleted.
+    const note = document.createElement("p");
+    note.className = "msg-narration-truncated";
+    note.textContent = "Earliest steps of this run are outside the loaded window.";
+    body.appendChild(note);
+  }
   for (const message of messages) body.appendChild(renderMessageBlock(message, false));
 
   const apply = (expanded) => {
