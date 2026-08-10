@@ -1930,6 +1930,18 @@ function applyMessagePage(held, data) {
   return data.incremental ? held.concat(data.messages) : data.messages;
 }
 
+/** A delta is only meaningful against the exact state it was requested for.
+ * Two polls overlap easily — the 3s timer plus the direct fetchMessages()
+ * after every send, delete, forget and regenerate — and before this change
+ * that was harmless, because every response replaced the thread wholesale.
+ * An append is not idempotent: both would add the same message and the reader
+ * would see it twice. So a delta that raced a delta is dropped, and the next
+ * poll 3 seconds later collects whatever it carried. A full page is always
+ * safe to apply, because replacing is idempotent no matter what else landed. */
+function canApplyPage(data, requestedFromRev, currentRev) {
+  return !data.incremental || requestedFromRev === currentRev;
+}
+
 function messagesEndpoint() {
   return messagesQuery(currentConversationId);
 }
@@ -1980,6 +1992,12 @@ async function fetchMessages() {
     updateHeader();
     return;
   }
+  // What this request is being asked against. A poll is not the only caller —
+  // sending, deleting, forgetting and regenerating all call fetchMessages()
+  // directly, so two can easily be in flight at once.
+  const askedFor = currentConversationId;
+  const askedFrom = heldConversationId === currentConversationId ? heldRev : "";
+
   const { ok, status, data } = await api("GET", messagesEndpoint());
   if (!ok) {
     if (status === 404) {
@@ -1992,6 +2010,9 @@ async function fetchMessages() {
     }
     return;
   }
+  if (askedFor !== currentConversationId) return;
+  if (!canApplyPage(data, askedFrom, heldRev)) return;
+
   heldMessages = applyMessagePage(heldMessages, data);
   heldRev = typeof data.rev === "string" ? data.rev : "";
   heldConversationId = currentConversationId;

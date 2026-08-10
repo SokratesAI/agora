@@ -726,3 +726,46 @@ describe("incremental message polling", () => {
     expect(counts[counts.length - 1]).toBe(30);
   });
 });
+
+// Two polls in flight at once. The 3s timer is not the only caller --
+// sending, deleting, forgetting and regenerating each call fetchMessages()
+// directly -- so overlap is ordinary, not exotic. It used to be harmless
+// because every response replaced the thread wholesale; an append is not
+// idempotent, and applying the same delta twice would show the reader the
+// same message twice.
+describe("overlapping polls", () => {
+  const page = (messages, { incremental = false, rev = "r1" } = {}) => ({
+    incremental,
+    rev,
+    messages,
+  });
+
+  it("drops a delta whose starting point another poll already moved past", () => {
+    // Both polls left holding rev "r10". The first lands, advancing to "r11".
+    expect(globalThis.canApplyPage(page([], { incremental: true }), "r10", "r10")).toBe(true);
+    // The second now describes a thread that no longer exists.
+    expect(globalThis.canApplyPage(page([], { incremental: true }), "r10", "r11")).toBe(false);
+  });
+
+  it("always applies a full page, because replacing is idempotent", () => {
+    expect(globalThis.canApplyPage(page([]), "r10", "r11")).toBe(true);
+    expect(globalThis.canApplyPage(page([]), "", "r11")).toBe(true);
+  });
+
+  it("does not duplicate a message when two polls carry the same delta", () => {
+    const held = [say("one")];
+    const arrived = say("two");
+    const delta = page([arrived], { incremental: true, rev: "r2" });
+
+    // Poll A applies against "r1" and moves the thread to "r2".
+    let current = "r1";
+    let thread = held;
+    expect(globalThis.canApplyPage(delta, current, current)).toBe(true);
+    thread = globalThis.applyMessagePage(thread, delta);
+    current = delta.rev;
+
+    // Poll B was requested against "r1" too, and must be discarded.
+    expect(globalThis.canApplyPage(delta, "r1", current)).toBe(false);
+    expect(thread.map((m) => m.text)).toEqual(["one", "two"]);
+  });
+});

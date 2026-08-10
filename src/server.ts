@@ -194,10 +194,12 @@ async function enrichConversation(
  *
  * The three inputs are exactly the three things any mutation path touches:
  * `id` covers append and delete, `text` covers edit-and-resend, `forgotten`
- * covers the forget toggle. Hashing full text rather than its length costs
- * ~1ms on the largest real conversation (620 messages, ~800KB) and removes
- * the one case a length would miss — a same-length edit of the newest
- * message, made from a second device. */
+ * covers the forget toggle. Hashing the full text rather than its length is
+ * what catches a same-length edit of the newest message, made from a second
+ * device — the one case a length would call unchanged. Measured on the
+ * largest real conversation (620 messages, 790KB of text): 1.79ms per call,
+ * so 3.6ms for the two an incremental request makes. That is paid only on the
+ * incremental path, and it buys not serialising and compressing 800KB. */
 function prefixRev(messages: Message[], endIndex: number): string {
   const hash = createHash("sha1");
   for (let i = 0; i <= endIndex; i++) {
@@ -1076,13 +1078,13 @@ export function createPublicApp(deps: ServerDeps): Express {
     // it made one.
     const all = conversation.messages;
     const limit = Number(req.query.limit ?? 0);
-    const window = Number.isFinite(limit) && limit > 0 ? all.slice(-limit) : all;
+    const windowSlice = Number.isFinite(limit) && limit > 0 ? all.slice(-limit) : all;
 
     const after = typeof req.query.after === "string" ? req.query.after : "";
     const clientRev = typeof req.query.rev === "string" ? req.query.rev : "";
     const afterIndex = after && clientRev ? all.findIndex((m) => m.id === after) : -1;
     const incremental = afterIndex >= 0 && prefixRev(all, afterIndex) === clientRev;
-    const messages = incremental ? all.slice(afterIndex + 1) : window;
+    const messages = incremental ? all.slice(afterIndex + 1) : windowSlice;
 
     // The fingerprint always covers the whole conversation, because after
     // applying this response the client is always standing on its last
