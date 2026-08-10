@@ -622,3 +622,107 @@ describe("subagent chips", () => {
     expect(label).toContain("grep -rn foo");
   });
 });
+
+// The other half of issues.md #48. The drawer polls every 3s, and until now
+// each poll re-downloaded the entire window -- which is why the window had to
+// stay at 200 messages, narrower than 32 of the 81 conversations that actually
+// exist. Now the poll asks for what arrived after what it holds, and the
+// server says whether that was a safe question to answer. These pin the
+// client's half of that contract: what it asks for, and what it does with
+// either answer.
+describe("incremental message polling", () => {
+  const page = (messages, { incremental = false, rev = "r1" } = {}) => ({
+    incremental,
+    rev,
+    messages,
+  });
+  const paramsOf = (url) => new URLSearchParams(url.split("?")[1]);
+
+  it("asks for a whole cycle on first load, and for nothing it already holds", () => {
+    const url = globalThis.messagesQuery("c1", [], "", null);
+    const params = paramsOf(url);
+    expect(url.startsWith("/conversations/c1/messages?")).toBe(true);
+    // 500 covers every cycle this loop has run: the largest live conversation
+    // on 2026-08-10 was 620 and the largest Nova cycle 474, against a p90 of
+    // 338. The old 200 cut two thirds of them.
+    expect(Number(params.get("limit"))).toBe(500);
+    expect(params.get("after")).toBeNull();
+    expect(params.get("rev")).toBeNull();
+  });
+
+  it("asks only for what follows its newest message once it holds some", () => {
+    const held = [say("a"), say("b")];
+    const params = paramsOf(globalThis.messagesQuery("c1", held, "rev-abc", "c1"));
+    expect(params.get("after")).toBe(held[1].id);
+    expect(params.get("rev")).toBe("rev-abc");
+  });
+
+  it("does not offer a cursor belonging to a different conversation", () => {
+    const held = [say("a")];
+    const params = paramsOf(globalThis.messagesQuery("c2", held, "rev-abc", "c1"));
+    expect(params.get("after")).toBeNull();
+    expect(params.get("rev")).toBeNull();
+  });
+
+  it("does not offer a cursor without the rev that makes it checkable", () => {
+    const params = paramsOf(globalThis.messagesQuery("c1", [say("a")], "", "c1"));
+    expect(params.get("after")).toBeNull();
+  });
+
+  it("appends an incremental page and replaces a full one", () => {
+    const held = [say("one"), say("two")];
+    const arrived = say("three");
+
+    const grown = globalThis.applyMessagePage(held, page([arrived], { incremental: true }));
+    expect(grown.map((m) => m.text)).toEqual(["one", "two", "three"]);
+
+    const replacement = [say("fresh")];
+    expect(
+      globalThis.applyMessagePage(grown, page(replacement)).map((m) => m.text),
+    ).toEqual(["fresh"]);
+  });
+
+  it("treats a response that says nothing about incrementality as a replacement", () => {
+    // An older server, or a cached response from one. Replacing is what this
+    // did before the change, so the wrong guess degrades to the old behaviour
+    // rather than to a thread with duplicated messages in it.
+    const held = [say("one")];
+    const legacy = { messages: [say("two")] };
+    expect(globalThis.applyMessagePage(held, legacy).map((m) => m.text)).toEqual(["two"]);
+  });
+
+  it("accumulates a whole run one poll at a time without dropping or duplicating", () => {
+    // 340 messages arriving a few at a time is what a real cycle looks like,
+    // and is past the old 200 window -- the case where the front used to fall
+    // off and the collapsed drawer's count went backwards.
+    const expected = [];
+    let held = [];
+    for (let poll = 0; poll < 85; poll++) {
+      const arrived = [say(`s${poll}a`), say(`s${poll}b`), say(`s${poll}c`), say(`s${poll}d`)];
+      expected.push(...arrived.map((m) => m.text));
+      held = globalThis.applyMessagePage(held, page(arrived, { incremental: poll > 0 }));
+    }
+    expect(held).toHaveLength(340);
+    expect(held.map((m) => m.text)).toEqual(expected);
+    expect(new Set(held.map((m) => m.id)).size).toBe(340);
+  });
+
+  it("keeps a drawer's step count climbing across polls instead of going backwards", () => {
+    // Edvard, issues.md #48: "does not count more steps, it actually goes
+    // downwards to 117??". That was the window sliding: each poll dropped a
+    // message off the front, so the count fell. Accumulating, it cannot.
+    let held = globalThis.applyMessagePage([], page([say("go")]));
+    const counts = [];
+    for (let poll = 0; poll < 30; poll++) {
+      held = globalThis.applyMessagePage(
+        held,
+        page([chip("vault_read", `p${poll}.md`)], { incremental: true }),
+      );
+      globalThis.renderedKey = "";
+      globalThis.renderMessages(held, false);
+      counts.push(Number(toggleOf(drawers()[0]).textContent.match(/(\d+) steps?/)[1]));
+    }
+    expect(counts).toEqual([...counts].sort((a, b) => a - b));
+    expect(counts[counts.length - 1]).toBe(30);
+  });
+});

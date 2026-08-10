@@ -229,6 +229,13 @@ let sheetTargetId = null;
 let editLinks = [];
 let editingMessageId = null;
 let lastRenderedMessages = [];
+// The thread as accumulated so far, plus the server's fingerprint of it. The
+// poll asks only for what arrived after `heldMessages`' last entry; the
+// server decides whether that is still a safe thing to answer and says so.
+// Held state is scoped to one conversation, so switching threads drops it.
+let heldMessages = [];
+let heldRev = "";
+let heldConversationId = null;
 // Which narration drawers the reader has opened, keyed by the group's anchor
 // (see groupNarration). Survives the 3s re-render; deliberately not
 // persisted across reloads — "hidden by default" is the whole point.
@@ -1882,8 +1889,49 @@ auditDetailScrim.addEventListener("click", (e) => {
 });
 
 // --- Messages ----------------------------------------------------------------
+// The first load's width, not the poll's. Polls are incremental (see
+// fetchMessages), so this bounds one request when a thread is opened rather
+// than one request every 3 seconds — which is why it can now be wide enough
+// to hold a whole cycle. Measured across all 81 live conversations on
+// 2026-08-10: median 169 messages, p90 338, largest Nova cycle 474, and 32 of
+// them over the old 200. At 500 every cycle this loop has ever run fits whole,
+// and the count in a collapsed drawer stops going backwards, because nothing
+// falls off the front of the client's copy any more.
+const MESSAGE_WINDOW = 500;
+
+// Both of these are defaulted rather than reading the accumulator inline, so a
+// test can drive them without reaching into lexical state — the same trick
+// renderMessages() already uses. The harness evals this file as global code,
+// so `function` declarations are reachable from a test and `let` is not.
+function messagesQuery(
+  conversationId,
+  held = heldMessages,
+  rev = heldRev,
+  heldFor = heldConversationId,
+) {
+  const params = new URLSearchParams({ limit: String(MESSAGE_WINDOW) });
+  const last = held[held.length - 1];
+  // Only ask for a delta against a thread we are actually holding. A stale id
+  // from a previous conversation would be answered correctly anyway (the
+  // server would not find it and would send the window), but asking for it
+  // states something untrue about our own state.
+  if (heldFor === conversationId && last && rev) {
+    params.set("after", last.id);
+    params.set("rev", rev);
+  }
+  return `/conversations/${conversationId}/messages?${params}`;
+}
+
+/** `incremental` is the server's answer to "is what you are holding still real
+ * history", so it alone decides append-vs-replace. Anything that does not
+ * claim to be incremental — an older server, a rev the server no longer
+ * recognises, a first load — replaces, which is exactly what this did before. */
+function applyMessagePage(held, data) {
+  return data.incremental ? held.concat(data.messages) : data.messages;
+}
+
 function messagesEndpoint() {
-  return `/conversations/${currentConversationId}/messages?limit=200`;
+  return messagesQuery(currentConversationId);
 }
 function replyEndpoint() {
   return `/conversations/${currentConversationId}/reply`;
@@ -1937,13 +1985,19 @@ async function fetchMessages() {
     if (status === 404) {
       currentConversationId = null;
       currentDetail = null;
+      heldMessages = [];
+      heldRev = "";
+      heldConversationId = null;
       fetchMessages();
     }
     return;
   }
+  heldMessages = applyMessagePage(heldMessages, data);
+  heldRev = typeof data.rev === "string" ? data.rev : "";
+  heldConversationId = currentConversationId;
   currentDetail = data;
   updateHeader();
-  renderMessages(data.messages);
+  renderMessages(heldMessages);
 }
 
 function renderMessages(

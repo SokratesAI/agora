@@ -1,4 +1,5 @@
 import express, { type Express, type RequestHandler } from "express";
+import { createHash } from "node:crypto";
 import compression from "compression";
 import multer from "multer";
 import type pino from "pino";
@@ -10,6 +11,7 @@ import type {
   Conversation,
   ConversationStore,
   ConversationUpdate,
+  Message,
   PersonaLink,
 } from "./chat/conversation-store.js";
 import type { PersonaStore, PersonaCapabilities, Persona } from "./chat/persona-store.js";
@@ -181,6 +183,28 @@ async function enrichConversation(
     createdAt: conversation.createdAt,
     ...(conversation.lastMessageAt !== undefined ? { lastMessageAt: conversation.lastMessageAt } : {}),
   };
+}
+
+/** Fingerprint of `messages[0..endIndex]` — the exact prefix a polling client
+ * claims to be holding. The client never computes this; it echoes back the
+ * string the server last handed it, and the server re-derives the truth. That
+ * asymmetry is deliberate: it means an incremental reply is only ever sent
+ * when the server itself can still see the history the client is built on,
+ * and no client-side cache-invalidation call site can be forgotten.
+ *
+ * The three inputs are exactly the three things any mutation path touches:
+ * `id` covers append and delete, `text` covers edit-and-resend, `forgotten`
+ * covers the forget toggle. Hashing full text rather than its length costs
+ * ~1ms on the largest real conversation (620 messages, ~800KB) and removes
+ * the one case a length would miss — a same-length edit of the newest
+ * message, made from a second device. */
+function prefixRev(messages: Message[], endIndex: number): string {
+  const hash = createHash("sha1");
+  for (let i = 0; i <= endIndex; i++) {
+    const message = messages[i];
+    hash.update(`${message.id} ${message.forgotten ? 1 : 0} ${message.text} `);
+  }
+  return hash.digest("hex").slice(0, 16);
 }
 
 function toInvokeMessages(
@@ -1028,14 +1052,46 @@ export function createPublicApp(deps: ServerDeps): Express {
     }
     // ?limit — critique #5: the runner polls every conversation every ~5s;
     // without a window this response grows forever.
+    //
+    // ?after + ?rev — the drawer polls every 3s and used to re-download its
+    // whole window each time, so the window had to stay narrow enough to
+    // afford 20 times a minute. Measured against the live pod 2026-08-10,
+    // one 474-message cycle: 32,789 brotli bytes at limit=200 versus 137,858
+    // for the whole thing, i.e. 11 KB/s against 46 KB/s sustained on a phone.
+    // That cost, not the drawer, is what kept Edvard from seeing a whole
+    // cycle (issues.md #48). A client that already holds everything up to
+    // `after`, and whose `rev` still matches this server's own fingerprint of
+    // that prefix, gets only what arrived since — normally nothing or one
+    // message. The window then bounds the FIRST load only, and never slides
+    // underneath a client that is keeping up.
+    //
+    // A stale or unrecognised `rev` is not an error and not a silent
+    // fallback: the full window comes back with `incremental: false`, which
+    // says plainly which of the two answers this is, so the client replaces
+    // instead of appending. Every mutation path — delete, edit-and-resend,
+    // forget — lands here as a mismatch without the client having to notice
+    // it made one.
+    const all = conversation.messages;
     const limit = Number(req.query.limit ?? 0);
-    const messages =
-      Number.isFinite(limit) && limit > 0
-        ? conversation.messages.slice(-limit)
-        : conversation.messages;
+    const window = Number.isFinite(limit) && limit > 0 ? all.slice(-limit) : all;
+
+    const after = typeof req.query.after === "string" ? req.query.after : "";
+    const clientRev = typeof req.query.rev === "string" ? req.query.rev : "";
+    const afterIndex = after && clientRev ? all.findIndex((m) => m.id === after) : -1;
+    const incremental = afterIndex >= 0 && prefixRev(all, afterIndex) === clientRev;
+    const messages = incremental ? all.slice(afterIndex + 1) : window;
+
+    // Whatever the client holds after applying this response. When messages
+    // came back, that is the conversation's own last message, because both
+    // answers end there — a window is a suffix. When none did, the client is
+    // still standing exactly where it said it was.
+    const endIndex = messages.length > 0 ? all.length - 1 : incremental ? afterIndex : -1;
+
     res.status(200).json({
       ...(await enrichConversation(conversation, personas)),
-      totalMessages: conversation.messages.length,
+      totalMessages: all.length,
+      incremental,
+      rev: prefixRev(all, endIndex),
       messages,
     });
   });
