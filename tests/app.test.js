@@ -799,3 +799,36 @@ describe("model picker labels", () => {
       .toBe("Claude Opus 5 (CLI)");
   });
 });
+
+// The reviewer's finding on this branch, and the more serious of the two:
+// relabelling the options changed nothing about which one is SELECTED. A
+// <select> with no value set shows its first option, and the catalog's first
+// entry is the metered Anthropic Haiku — so Edvard opening New Chat and
+// tapping Create without touching the dropdown billed the prepaid balance,
+// on the most common path there is.
+describe("model picker default selection", () => {
+  const known = new Map([
+    ["anthropic:claude-haiku-4-5-20251001", {}],
+    ["claude-cli:claude-haiku-4-5-20251001", {}],
+    ["gemini:gemini-3.6-flash", {}],
+  ]);
+
+  it("falls back to the server's default model, not to whatever is first", () => {
+    expect(globalThis.chosenModelValue("", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("claude-cli:claude-haiku-4-5-20251001");
+  });
+
+  it("keeps an existing selection over the default", () => {
+    expect(globalThis.chosenModelValue("gemini:gemini-3.6-flash", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("gemini:gemini-3.6-flash");
+  });
+
+  it("ignores a previous or default value the catalog no longer offers", () => {
+    // A retired model id must not be forced onto the select — that would
+    // set .value to something with no matching <option>, which silently
+    // resolves to empty and shows the first option again.
+    expect(globalThis.chosenModelValue("gemini:retired", "claude-cli:claude-haiku-4-5-20251001", known))
+      .toBe("claude-cli:claude-haiku-4-5-20251001");
+    expect(globalThis.chosenModelValue("", "anthropic:retired", known)).toBe("");
+  });
+});

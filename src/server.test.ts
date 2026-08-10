@@ -11,6 +11,7 @@ import {
 } from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
 import { MessageStore } from "./chat/message-store.js";
+import { MODEL_CATALOG } from "./models.js";
 import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
 import { HeartbeatStore } from "./chat/heartbeat-store.js";
@@ -109,6 +110,35 @@ describe("agora public app", () => {
     expect(main?.personas?.[0].role).toBe("curator");
     const persona = await deps.personas.get(main!.personas![0].personaId);
     expect(persona?.name).toBe("Agora");
+    // 2026-08-10: this bootstrap used to spell its default `MODEL_CATALOG[0].id`,
+    // which is the metered Anthropic entry — so on a fresh install Edvard's own
+    // assistant was created billing the prepaid balance. Asserting the name
+    // alone passed either way.
+    expect(MODEL_CATALOG.find((m) => m.id === persona?.model)?.metered).toBeUndefined();
+  });
+
+  it("creates an inline persona on a non-metered model when none is given", async () => {
+    // The other MODEL_CATALOG[0] fallback: POST /conversations with inline
+    // persona fields and no `model`.
+    const res = await request(app)
+      .post("/conversations")
+      .send({ name: "Fresh", personality: "hi" });
+    expect(res.status).toBe(201);
+    const created = await deps.personas.list();
+    const fresh = created.find((p) => p.name === "Fresh");
+    expect(fresh).toBeDefined();
+    expect(MODEL_CATALOG.find((m) => m.id === fresh?.model)?.metered).toBeUndefined();
+  });
+
+  it("GET /models reports the default alongside the catalog", async () => {
+    // The client picks the initial <select> value from this rather than from
+    // array order, so the two must not be able to drift.
+    const res = await request(app).get("/models");
+    expect(res.status).toBe(200);
+    expect(typeof res.body.defaultModel).toBe("string");
+    const chosen = MODEL_CATALOG.find((m) => m.id === res.body.defaultModel);
+    expect(chosen).toBeDefined();
+    expect(chosen?.metered).toBeUndefined();
   });
 
   it("GET /messages serves the Main conversation's thread", async () => {

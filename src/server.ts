@@ -14,6 +14,11 @@ import type {
   Message,
   PersonaLink,
 } from "./chat/conversation-store.js";
+// The one name for "what model do we use when nobody picked one". It used to
+// be spelled two ways: DEFAULT_MODEL here, and MODEL_CATALOG[0].id at the two
+// fallbacks below — which is the metered Anthropic entry, so both silently
+// billed the prepaid balance. Array position is not a default.
+import { DEFAULT_MODEL } from "./chat/conversation-store.js";
 import type { PersonaStore, PersonaCapabilities, Persona } from "./chat/persona-store.js";
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
 import { isValidSchedule, SCHEDULE_ERROR } from "./chat/heartbeat-store.js";
@@ -282,7 +287,7 @@ async function resolveMain(deps: ServerDeps): Promise<Conversation> {
   persona ??= await deps.personas.create({
     name: "Agora",
     personality: "You are Agora, Edvard's own assistant inside his self-hosted chat platform.",
-    model: MODEL_CATALOG[0].id,
+    model: DEFAULT_MODEL,
   });
   return deps.conversations.create("Main", "", persona.model, persona.thinking, [
     { personaId: persona.id, role: "curator" },
@@ -471,7 +476,7 @@ function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
       persona = await deps.personas.create({
         name,
         personality: typeof personality === "string" ? personality : "",
-        model: typeof model === "string" ? model : MODEL_CATALOG[0].id,
+        model: typeof model === "string" ? model : DEFAULT_MODEL,
         thinking: typeof thinking === "boolean" ? thinking : false,
         capabilities: parseCapabilities(capabilities),
       });
@@ -733,7 +738,7 @@ export function createPublicApp(deps: ServerDeps): Express {
   registerCreateWorkflowRoute(app, deps);
 
   app.get("/models", (_req, res) => {
-    res.status(200).json({ models: MODEL_CATALOG });
+    res.status(200).json({ models: MODEL_CATALOG, defaultModel: DEFAULT_MODEL });
   });
 
   // ---- Personas ---------------------------------------------------------

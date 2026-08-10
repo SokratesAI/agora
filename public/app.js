@@ -223,6 +223,7 @@ let currentDetail = null;
 let renderedKey = "";
 let modelCatalogById = new Map();
 let latestModels = [];
+let defaultModelId = "";
 let allConversations = [];
 let allPersonas = [];
 let sheetTargetId = null;
@@ -377,6 +378,7 @@ async function loadModelCatalog() {
   const { ok, data } = await api("GET", "/models");
   if (!ok) return;
   latestModels = data.models;
+  defaultModelId = data.defaultModel || "";
   modelCatalogById = new Map(data.models.map((m) => [m.id, m]));
   for (const select of [newChatModel, editModel, personaFormModel]) populateModelSelect(select);
   updateThinkingVisibility(newChatModel, newChatThinkingRow, newChatThinking, newChatBadge);
@@ -397,6 +399,19 @@ const PROVIDER_GROUP_LABELS = {
   gemini: "Gemini",
   "claude-cli": "Claude (subscription)",
 };
+
+// A <select> with no value set displays its FIRST option, and the catalog's
+// first entry is a metered Anthropic model — so opening New Chat and tapping
+// Create without touching the dropdown silently billed the prepaid balance.
+// Array position is not a default: fall back to the server's own
+// DEFAULT_MODEL, which /models now reports alongside the catalog so the two
+// cannot drift. `known` is passed in rather than read from module state so
+// this stays a pure decision.
+function chosenModelValue(previous, defaultId, known) {
+  if (previous && known.has(previous)) return previous;
+  if (defaultId && known.has(defaultId)) return defaultId;
+  return "";
+}
 
 function modelGroupLabel(provider) {
   return PROVIDER_GROUP_LABELS[provider] || provider;
@@ -425,7 +440,8 @@ function populateModelSelect(select) {
     option.textContent = modelOptionLabel(model);
     groups.get(model.provider).appendChild(option);
   }
-  if (previous && modelCatalogById.has(previous)) select.value = previous;
+  const chosen = chosenModelValue(previous, defaultModelId, modelCatalogById);
+  if (chosen) select.value = chosen;
 }
 
 function capabilityBadgeText(model) {
