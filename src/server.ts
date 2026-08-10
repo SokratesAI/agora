@@ -1,4 +1,5 @@
 import express, { type Express, type RequestHandler } from "express";
+import compression from "compression";
 import multer from "multer";
 import type pino from "pino";
 import type { Config } from "./config.js";
@@ -539,6 +540,22 @@ export function createPublicApp(deps: ServerDeps): Express {
     );
     return resolved.filter((m): m is import("./chat/attachment-store.js").AttachmentMeta => m !== null);
   }
+  // Compress everything above compression's 1kb default threshold. This app
+  // is JSON and static text, and nothing in front of it compresses — the
+  // Tailscale Ingress is a plain forwarder. Content negotiation picks per
+  // client: a browser offering `br` gets Brotli, a gzip-only client gets
+  // gzip, and a client that offers neither (urllib, i.e. the runner) gets
+  // the same plain bytes it always did.
+  //
+  // Measured on the live pod's own payloads, 2026-08-10:
+  //                        raw      gzip -6      brotli q4
+  //   /conversations     103,631      6,851 →       6,031  (17.2x)
+  //   ?limit=200 window  165,725     32,502 →      30,968  ( 5.4x)
+  //   public/app.js      111,985     27,537
+  //   public/index.html   58,969     12,313
+  //
+  // Must precede express.static so the frontend is compressed too.
+  app.use(compression());
   app.use(express.json());
   app.use(express.static("public"));
 
