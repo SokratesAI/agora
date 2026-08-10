@@ -381,6 +381,176 @@ describe("agora public app", () => {
     expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(["m3", "m4"]);
   });
 
+  // ?after + ?rev. The drawer polls every 3s; re-sending the whole window each
+  // time is what made a wide window unaffordable (issues.md #48), and a wide
+  // window is what Edvard needs to see a cycle end to end. The contract these
+  // tests pin: the server hands out a fingerprint of the prefix it just
+  // covered, and answers incrementally only while its own history still
+  // matches that fingerprint. Every one of them re-derives `rev` from a real
+  // response rather than hard-coding it — the digest is an implementation
+  // detail, the behaviour is not.
+  describe("incremental message polling", () => {
+    const texts = (body: { messages: { text: string }[] }) => body.messages.map((m) => m.text);
+
+    // Named per call: POST /conversations returns the existing conversation
+    // when the name matches, so two "Polled" threads are one thread.
+    async function conversationWith(count: number, name = "Polled"): Promise<string> {
+      const created = await request(app)
+        .post("/conversations")
+        .send({ name, model: "anthropic:claude-sonnet-5" });
+      const id = created.body.conversation.id;
+      for (let i = 0; i < count; i++) {
+        await request(app).post(`/conversations/${id}/reply`).send({ text: `m${i}` });
+      }
+      return id;
+    }
+
+    const poll = (id: string, after: string, rev: string) =>
+      request(app).get(`/conversations/${id}/messages?limit=200&after=${after}&rev=${rev}`);
+
+    it("sends only what arrived after the client's last message", async () => {
+      const id = await conversationWith(3);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      expect(first.body.incremental).toBe(false);
+      expect(texts(first.body)).toEqual(["m0", "m1", "m2"]);
+
+      const last = first.body.messages[2].id;
+      const caughtUp = await poll(id, last, first.body.rev);
+      expect(caughtUp.body.incremental).toBe(true);
+      expect(caughtUp.body.messages).toEqual([]);
+      // Standing still must not move the fingerprint, or the next poll would
+      // present a rev the server has never issued.
+      expect(caughtUp.body.rev).toBe(first.body.rev);
+
+      await request(app).post(`/conversations/${id}/reply`).send({ text: "m3" });
+      const delta = await poll(id, last, first.body.rev);
+      expect(delta.body.incremental).toBe(true);
+      expect(texts(delta.body)).toEqual(["m3"]);
+      expect(delta.body.totalMessages).toBe(4);
+    });
+
+    it("keeps answering incrementally as the client walks forward", async () => {
+      const id = await conversationWith(2);
+      let page = (await request(app).get(`/conversations/${id}/messages?limit=200`)).body;
+      const seen = [...page.messages];
+
+      for (let i = 0; i < 3; i++) {
+        await request(app).post(`/conversations/${id}/reply`).send({ text: `later${i}` });
+        page = (await poll(id, seen[seen.length - 1].id, page.rev)).body;
+        expect(page.incremental).toBe(true);
+        seen.push(...page.messages);
+      }
+      expect(seen.map((m: { text: string }) => m.text)).toEqual([
+        "m0",
+        "m1",
+        "later0",
+        "later1",
+        "later2",
+      ]);
+      expect(seen).toHaveLength(page.totalMessages);
+    });
+
+    it("falls back to the full window, and says so, when the prefix changed", async () => {
+      const id = await conversationWith(4);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      const last = first.body.messages[3].id;
+
+      // Forget an earlier message: the count is unchanged, so nothing but a
+      // fingerprint over the messages themselves could notice this.
+      await request(app)
+        .post(`/conversations/${id}/messages/${first.body.messages[1].id}/forget`)
+        .send({ forgotten: true });
+
+      const res = await poll(id, last, first.body.rev);
+      expect(res.body.incremental).toBe(false);
+      expect(texts(res.body)).toEqual(["m0", "m1", "m2", "m3"]);
+      expect(res.body.messages[1].forgotten).toBe(true);
+      expect(res.body.rev).not.toBe(first.body.rev);
+    });
+
+    it("falls back when an earlier message was deleted", async () => {
+      const id = await conversationWith(4);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      const last = first.body.messages[3].id;
+
+      await request(app).delete(`/conversations/${id}/messages/${first.body.messages[0].id}`);
+
+      const res = await poll(id, last, first.body.rev);
+      expect(res.body.incremental).toBe(false);
+      expect(texts(res.body)).toEqual(["m1", "m2", "m3"]);
+    });
+
+    it("falls back when the client's own last message is gone", async () => {
+      const id = await conversationWith(3);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      const last = first.body.messages[2].id;
+
+      await request(app).delete(`/conversations/${id}/messages/${last}`);
+
+      const res = await poll(id, last, first.body.rev);
+      expect(res.body.incremental).toBe(false);
+      expect(texts(res.body)).toEqual(["m0", "m1"]);
+    });
+
+    it("ignores after/rev unless both are present, and never trusts a bare id", async () => {
+      const id = await conversationWith(3);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      const last = first.body.messages[2].id;
+
+      const noRev = await request(app).get(
+        `/conversations/${id}/messages?limit=200&after=${last}`,
+      );
+      expect(noRev.body.incremental).toBe(false);
+      expect(texts(noRev.body)).toEqual(["m0", "m1", "m2"]);
+
+      const wrongRev = await poll(id, last, "0000000000000000");
+      expect(wrongRev.body.incremental).toBe(false);
+      expect(texts(wrongRev.body)).toEqual(["m0", "m1", "m2"]);
+    });
+
+    it("distinguishes a same-length edit of the newest message", async () => {
+      const id = await conversationWith(2);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      const last = first.body.messages[1];
+
+      // "m1" -> "z9": same id, same length, same position, same count. A
+      // fingerprint over anything less than the text itself would call this
+      // unchanged and the second device would never see the edit.
+      await request(app)
+        .patch(`/conversations/${id}/messages/${last.id}`)
+        .send({ text: "z9" });
+
+      const res = await poll(id, last.id, first.body.rev);
+      expect(res.body.incremental).toBe(false);
+      expect(texts(res.body)).toEqual(["m0", "z9"]);
+    });
+
+    it("does not answer incrementally across two different conversations", async () => {
+      const a = await conversationWith(2, "Thread A");
+      const b = await conversationWith(2, "Thread B");
+      const fromA = await request(app).get(`/conversations/${a}/messages?limit=200`);
+
+      const res = await poll(b, fromA.body.messages[1].id, fromA.body.rev);
+      expect(res.body.incremental).toBe(false);
+      expect(texts(res.body)).toEqual(["m0", "m1"]);
+    });
+
+    it("costs a fraction of the window it replaces", async () => {
+      const id = await conversationWith(120);
+      const first = await request(app).get(`/conversations/${id}/messages?limit=200`);
+      await request(app).post(`/conversations/${id}/reply`).send({ text: "one more" });
+
+      const delta = await poll(id, first.body.messages[119].id, first.body.rev);
+      expect(delta.body.incremental).toBe(true);
+      expect(texts(delta.body)).toEqual(["one more"]);
+      // The saving is the whole point of the change, so it gets an assertion
+      // rather than a comment. Enrichment metadata rides along on both.
+      expect(JSON.stringify(delta.body).length).toBeLessThan(
+        JSON.stringify(first.body).length / 4,
+      );
+    });
+  });
+
   it("PATCH /conversations/:id routes personality/model edits to the curator persona", async () => {
     const created = await request(app)
       .post("/conversations")
