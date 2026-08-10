@@ -202,7 +202,10 @@ function prefixRev(messages: Message[], endIndex: number): string {
   const hash = createHash("sha1");
   for (let i = 0; i <= endIndex; i++) {
     const message = messages[i];
-    hash.update(`${message.id} ${message.forgotten ? 1 : 0} ${message.text} `);
+    // JSON rather than a delimiter string: its own escaping is what keeps
+    // ["a","b"] apart from ["ab"], so there is no separator to pick and no
+    // way for message text to impersonate one.
+    hash.update(JSON.stringify([message.id, message.forgotten === true, message.text]));
   }
   return hash.digest("hex").slice(0, 16);
 }
@@ -1081,17 +1084,19 @@ export function createPublicApp(deps: ServerDeps): Express {
     const incremental = afterIndex >= 0 && prefixRev(all, afterIndex) === clientRev;
     const messages = incremental ? all.slice(afterIndex + 1) : window;
 
-    // Whatever the client holds after applying this response. When messages
-    // came back, that is the conversation's own last message, because both
-    // answers end there — a window is a suffix. When none did, the client is
-    // still standing exactly where it said it was.
-    const endIndex = messages.length > 0 ? all.length - 1 : incremental ? afterIndex : -1;
+    // The fingerprint always covers the whole conversation, because after
+    // applying this response the client is always standing on its last
+    // message. Both answers end there — a window is a suffix, and an
+    // incremental slice runs to the end — and when neither carried anything,
+    // the client was already caught up to it. (A first draft branched on
+    // those three cases; a mutation test showed all three branches compute
+    // the same number, which is what deleted them.)
 
     res.status(200).json({
       ...(await enrichConversation(conversation, personas)),
       totalMessages: all.length,
       incremental,
-      rev: prefixRev(all, endIndex),
+      rev: prefixRev(all, all.length - 1),
       messages,
     });
   });
