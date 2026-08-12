@@ -5,13 +5,21 @@
 // parallel deploy whichever one *finished last*, which is not the same as
 // whichever commit is newest.
 //
-// Measured 2026-08-12 in agora-claude-bridge, which has the identical job:
-// #41 and #40 merged four seconds apart, #40 was the newer commit, and #41's
-// build pushed its digest one second later and overwrote it -- pinning the
-// config repo to the commit before the endpoint #40 had just added. Both CI
-// runs were green, the image built, ArgoCD synced, and the deployed pod
-// served a 404 for a feature that was merged in main. Nothing reported an
-// error anywhere.
+// Measured 2026-08-12 in agora-claude-bridge, which has the identical job.
+// #41 merged at 00:18:38Z and #40 at 00:18:41Z -- three seconds apart, with
+// #40 the newer of the two and carrying #41 as its parent. The config repo
+// was then pinned to sha256:dd38617..., the image built from #41's commit
+// 4ee2ff7; the image built from #40's commit f36df04 is sha256:49201d4...
+// and was never deployed. Both CI runs were green, both images built, ArgoCD
+// synced, and the deployed pod served a 404 for /health/database, which #40
+// had just added. Nothing reported an error anywhere.
+//
+// The two digests are the evidence and they are checkable:
+// `gh api /orgs/SokratesAI/packages/container/agora-claude-bridge/versions`
+// maps sha-4ee2ff7 and sha-f36df04 to two different images. A reviewer read
+// this docstring's first draft, pulled the same run history, and concluded
+// the incident never happened because it had attributed both builds to one
+// digest. It was wrong -- but the "four seconds" in that draft was wrong too.
 //
 // Scope: this guards *this repo's* build.yaml only. The Crossplane
 // Composition that seeds new services got the same block separately;
