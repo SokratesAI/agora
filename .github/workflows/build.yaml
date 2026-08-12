@@ -7,6 +7,42 @@ on:
     tags: ["v*"]
   pull_request:
 
+# One pipeline at a time per ref, because update-manifest below is a blind
+# `sed` of whichever image digest its own run produced. Two merges to main in
+# quick succession otherwise run their pipelines in parallel and the LAST one
+# to finish wins -- which is not the same as the newest commit.
+#
+# Measured 2026-08-12 in agora-claude-bridge, which has the identical job.
+# #41 merged at 00:18:38Z and #40 at 00:18:41Z -- three seconds apart, with
+# #40 the newer of the two and carrying #41 as its parent. The config repo
+# was then pinned to sha256:dd38617..., which is the image built from #41's
+# commit 4ee2ff7; the image built from #40's commit f36df04 is
+# sha256:49201d4... and was never deployed. Every check was green -- CI
+# passed on both, both images built, ArgoCD synced -- and the deployed pod
+# served a 404 for /health/database, which #40 had just added. Nothing
+# anywhere reported an error. This repo has the same flaw and has only been
+# lucky with merge spacing.
+#
+# (Those digests are the evidence, and they are checkable:
+#  gh api /orgs/SokratesAI/packages/container/agora-claude-bridge/versions
+#  maps sha-4ee2ff7 and sha-f36df04 to two different images.)
+#
+# cancel-in-progress stays false deliberately: killing a run partway through
+# update-manifest is the exact failure this is meant to prevent. Queued runs
+# are superseded by newer ones, so the last write is the ref's tip either way.
+#
+# The group is NOT simply `github.ref`, which is what the bridge and the
+# runner use and what this repo's first draft copied. Unlike those, this
+# workflow also builds `v*` tags, and update-manifest inherits build-push's
+# `main || refs/tags/v*` condition -- so a release tag and a push to main are
+# two different refs writing the SAME agora-config manifest.yaml, and a
+# per-ref group leaves them free to race each other exactly as before. So:
+# pull requests get a lane each (nothing else would queue every PR behind
+# main), and everything that can reach update-manifest shares one.
+concurrency:
+  group: build-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: sokratesai/agora
