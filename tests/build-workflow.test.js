@@ -41,23 +41,40 @@ function concurrencyBlock() {
   return body;
 }
 
+function group() {
+  return (concurrencyBlock() ?? []).find((l) => l.startsWith("group:"));
+}
+
 describe("build.yaml", () => {
-  it("serialises pipelines per ref", () => {
-    const body = concurrencyBlock();
+  it("declares a concurrency group", () => {
     expect(
-      body,
+      concurrencyBlock(),
       "build.yaml declares no top-level concurrency group -- two pushes to " +
         "main run update-manifest in parallel and the last to finish wins, " +
         "not the newest commit",
     ).not.toBeNull();
+    expect(group(), "concurrency block has no group").toBeDefined();
+  });
 
-    const group = body.find((l) => l.startsWith("group:"));
-    expect(group, "concurrency block has no group").toBeDefined();
+  it("puts every ref that deploys into one lane", () => {
+    // build-push runs for `main` AND for `v*` tags, and update-manifest
+    // inherits that condition -- so those are two different refs writing the
+    // same agora-config manifest.yaml. A per-ref group (which is what the
+    // bridge and the runner correctly use, because neither builds tags)
+    // would leave a release tag free to race a push to main.
     expect(
-      group,
-      `concurrency group ${group} must be per-ref, or every pull_request ` +
-        "build queues behind main",
-    ).toContain("github.ref");
+      group(),
+      `concurrency group ${group()} is per-ref, so a v* tag build and a main ` +
+        "build run in parallel and both sed the same manifest.yaml",
+    ).toContain("'deploy'");
+  });
+
+  it("still gives each pull request its own lane", () => {
+    expect(
+      group(),
+      `concurrency group ${group()} does not vary by ref for pull requests, ` +
+        "so every PR build queues behind every other one",
+    ).toContain("github.event_name == 'pull_request' && github.ref");
   });
 
   it("never cancels an in-flight build", () => {

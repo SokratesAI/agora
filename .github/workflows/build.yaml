@@ -24,8 +24,17 @@ on:
 # cancel-in-progress stays false deliberately: killing a run partway through
 # update-manifest is the exact failure this is meant to prevent. Queued runs
 # are superseded by newer ones, so the last write is the ref's tip either way.
+#
+# The group is NOT simply `github.ref`, which is what the bridge and the
+# runner use and what this repo's first draft copied. Unlike those, this
+# workflow also builds `v*` tags, and update-manifest inherits build-push's
+# `main || refs/tags/v*` condition -- so a release tag and a push to main are
+# two different refs writing the SAME agora-config manifest.yaml, and a
+# per-ref group leaves them free to race each other exactly as before. So:
+# pull requests get a lane each (nothing else would queue every PR behind
+# main), and everything that can reach update-manifest shares one.
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: false
 
 env:
