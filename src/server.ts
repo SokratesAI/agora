@@ -395,6 +395,9 @@ function registerCreateHeartbeatRoute(app: Express, deps: ServerDeps): void {
       ...(typeof body.conversationRetention === "number"
         ? { conversationRetention: body.conversationRetention }
         : {}),
+      ...(typeof body.pushNotifications === "boolean"
+        ? { pushNotifications: body.pushNotifications }
+        : {}),
     });
     res.status(201).json({ status: "created", heartbeat });
   });
@@ -901,6 +904,9 @@ export function createPublicApp(deps: ServerDeps): Express {
     }
     if (typeof body.conversationRetention === "number") {
       updates.conversationRetention = body.conversationRetention;
+    }
+    if (typeof body.pushNotifications === "boolean") {
+      updates.pushNotifications = body.pushNotifications;
     }
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {

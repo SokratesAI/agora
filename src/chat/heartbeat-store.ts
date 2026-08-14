@@ -45,6 +45,14 @@ export interface Heartbeat {
    * older ones get archived (not deleted). Only meaningful when
    * `rotateConversationEachRun` is true; defaults to 5 if unset. */
   conversationRetention?: number;
+  /** 2026-08-14, Edvard: "Did you fix the notification for agora
+   * heartbeats? So i can turn them off?" — false sends this heartbeat's
+   * reply with `push: false`, so the message still lands in the
+   * conversation and only the phone buzz is withheld. Same shape as quiet
+   * hours, and the same reason: suppressing the message would lose the
+   * reply, which is not what "turn the notification off" means. Absent is
+   * true, so every existing heartbeat keeps notifying. */
+  pushNotifications?: boolean;
   createdAt: string;
 }
 
@@ -62,9 +70,10 @@ export interface HeartbeatUpdate {
   lastResult?: string | null;
   rotateConversationEachRun?: boolean;
   conversationRetention?: number;
+  pushNotifications?: boolean;
 }
 
-const HHMM = "([01]?\\d|2[0-3]):[0-5]\\d";
+const HHMM ="([01]?\\d|2[0-3]):[0-5]\\d";
 /** Note that `cron@` is matched loosely here on purpose — the fields are
  * checked by isValidCron, not by this regex. So matching SCHEDULE_RE no
  * longer implies a schedule is valid; isValidSchedule is the only answer,
@@ -213,6 +222,7 @@ export class HeartbeatStore {
     enabled?: boolean;
     rotateConversationEachRun?: boolean;
     conversationRetention?: number;
+    pushNotifications?: boolean;
   }): Promise<Heartbeat> {
     const heartbeat: Heartbeat = {
       id: randomUUID(),
@@ -232,6 +242,9 @@ export class HeartbeatStore {
         : {}),
       ...(fields.conversationRetention !== undefined
         ? { conversationRetention: fields.conversationRetention }
+        : {}),
+      ...(fields.pushNotifications !== undefined
+        ? { pushNotifications: fields.pushNotifications }
         : {}),
       createdAt: new Date().toISOString(),
     };

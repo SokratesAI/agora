@@ -176,6 +176,7 @@ const heartbeatFormSchedulePreview = $("heartbeat-form-schedule-preview");
 const heartbeatFormTask = $("heartbeat-form-task");
 const heartbeatFormVaultPaths = $("heartbeat-form-vault-paths");
 const heartbeatFormEnabled = $("heartbeat-form-enabled");
+const heartbeatFormPush = $("heartbeat-form-push");
 const heartbeatFormStatus = $("heartbeat-form-status");
 const heartbeatFormCancel = $("heartbeat-form-cancel");
 
@@ -1257,7 +1258,8 @@ function renderHeartbeatRow(heartbeat) {
   main.className = "studio-item-main";
   const name = document.createElement("span");
   name.className = "studio-item-name";
-  name.textContent = `${heartbeat.enabled ? "" : "⏸ "}${heartbeat.name}`;
+  const muted = heartbeat.pushNotifications === false ? "🔕 " : "";
+  name.textContent = `${heartbeat.enabled ? "" : "⏸ "}${muted}${heartbeat.name}`;
   const meta = document.createElement("span");
   meta.className = "studio-item-meta";
   const last = heartbeat.lastRunAt
@@ -1510,6 +1512,9 @@ function openHeartbeatForm(heartbeat) {
   heartbeatFormTask.value = heartbeat?.task || "";
   heartbeatFormVaultPaths.value = (heartbeat?.vaultPaths || []).join("\n");
   heartbeatFormEnabled.checked = heartbeat ? Boolean(heartbeat.enabled) : true;
+  // Absent means notify, so an existing heartbeat that predates this field
+  // reads as checked rather than as muted.
+  heartbeatFormPush.checked = heartbeat ? heartbeat.pushNotifications !== false : true;
   heartbeatFormStatus.textContent = "";
   heartbeatFormScrim.hidden = false;
 }
@@ -1561,6 +1566,7 @@ heartbeatForm.addEventListener("submit", async (event) => {
       .map((p) => p.trim())
       .filter(Boolean),
     enabled: heartbeatFormEnabled.checked,
+    pushNotifications: heartbeatFormPush.checked,
   };
   heartbeatFormStatus.textContent = "Saving...";
   const { ok, data } = heartbeatFormEditId
