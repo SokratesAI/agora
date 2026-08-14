@@ -832,3 +832,65 @@ describe("model picker default selection", () => {
     expect(globalThis.chosenModelValue("", "anthropic:retired", known)).toBe("");
   });
 });
+
+describe("conversation list polling (issues.md #3)", () => {
+  const conv = (id, over = {}) => ({
+    id,
+    rootId: id,
+    name: `conv ${id}`,
+    archived: false,
+    status: "active",
+    lastMessageAt: "2026-08-14T06:00:00.000Z",
+    createdAt: "2026-08-14T05:00:00.000Z",
+    ...over,
+  });
+
+  const serves = (conversations) =>
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ conversations }),
+    });
+
+  it("notices every field the drawer actually draws from", () => {
+    const sig = globalThis.conversationListSignature;
+    const base = [conv("a")];
+    expect(sig(base)).toBe(sig([conv("a")]));
+    expect(sig(base)).not.toBe(sig([conv("a"), conv("b")]));
+    expect(sig(base)).not.toBe(sig([conv("a", { name: "renamed" })]));
+    expect(sig(base)).not.toBe(sig([conv("a", { archived: true })]));
+    expect(sig(base)).not.toBe(sig([conv("a", { rootId: "z" })]));
+    expect(sig(base)).not.toBe(sig([conv("a", { status: "archived" })]));
+    expect(sig(base)).not.toBe(sig([conv("a", { lastMessageAt: "2026-08-14T07:00:00.000Z" })]));
+  });
+
+  it("treats a missing list as empty rather than throwing", () => {
+    expect(globalThis.conversationListSignature(undefined)).toBe("");
+  });
+
+  it("re-renders when a conversation appears, and not when nothing changed", async () => {
+    // The whole bug: every cycle creates a conversation, and the sidebar was
+    // loaded once at boot, so it could only ever appear on a full reload.
+    serves([conv("a")]);
+    expect(await globalThis.refreshConversationList()).toBe(true);
+
+    serves([conv("a")]);
+    expect(await globalThis.refreshConversationList()).toBe(false);
+
+    serves([conv("a"), conv("b")]);
+    expect(await globalThis.refreshConversationList()).toBe(true);
+
+    serves([conv("a"), conv("b")]);
+    expect(await globalThis.refreshConversationList()).toBe(false);
+  });
+
+  it("leaves the list alone when the request fails", async () => {
+    serves([conv("a"), conv("b")]);
+    await globalThis.refreshConversationList();
+    globalThis.fetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    expect(await globalThis.refreshConversationList()).toBe(false);
+    // still the two it had — a failed poll must not blank the sidebar
+    serves([conv("a"), conv("b")]);
+    expect(await globalThis.refreshConversationList()).toBe(false);
+  });
+});
