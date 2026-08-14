@@ -925,3 +925,44 @@ describe("app.js stays plain text", () => {
     expect(sig).toContain("\u0000");
   });
 });
+
+// The heartbeat push toggle (Edvard, 2026-08-14: "Did you fix the
+// notification for agora heartbeats? So i can turn them off?"). These run
+// against the real `index.html`, so a checkbox whose id does not exist in
+// the markup fails here rather than on his phone -- which is how a rating
+// picker shipped completely dead two cycles ago.
+describe("heartbeat push notification toggle", () => {
+  it("ticks the box for a heartbeat with no pushNotifications field", () => {
+    // Absent means notify. Every heartbeat created before the field exists
+    // has no such key and must not read as muted.
+    globalThis.openHeartbeatForm({ id: "hb1", name: "HB", schedule: "every@1h" });
+    expect(document.getElementById("heartbeat-form-push").checked).toBe(true);
+  });
+
+  it("unticks the box for a muted heartbeat", () => {
+    globalThis.openHeartbeatForm({
+      id: "hb1", name: "HB", schedule: "every@1h", pushNotifications: false,
+    });
+    expect(document.getElementById("heartbeat-form-push").checked).toBe(false);
+  });
+
+  it("ticks the box for a new heartbeat", () => {
+    globalThis.openHeartbeatForm(null);
+    expect(document.getElementById("heartbeat-form-push").checked).toBe(true);
+  });
+
+  it("marks a muted heartbeat in the studio list", () => {
+    const row = globalThis.renderHeartbeatRow({
+      id: "hb1", name: "HB", schedule: "every@1h", enabled: true,
+      pushNotifications: false,
+    });
+    expect(row.querySelector(".studio-item-name").textContent).toContain("🔕");
+  });
+
+  it("leaves an unmuted heartbeat unmarked", () => {
+    const row = globalThis.renderHeartbeatRow({
+      id: "hb1", name: "HB", schedule: "every@1h", enabled: true,
+    });
+    expect(row.querySelector(".studio-item-name").textContent).not.toContain("🔕");
+  });
+});
