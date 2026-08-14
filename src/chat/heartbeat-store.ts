@@ -148,10 +148,24 @@ export function isValidSchedule(schedule: string): boolean {
   }
   if (!schedule.startsWith("every@")) return true;
   const [amount, anchor] = schedule.slice("every@".length).split("@");
-  if (anchor === undefined) return true;
   const value = Number(amount.slice(0, -1));
   const minutes = amount.endsWith("h") ? value * 60 : value;
-  return minutes > 0 && 1440 % minutes === 0;
+  // Zero is checked for every `every@` schedule, anchored or not. It used to
+  // sit below the `anchor === undefined` return, so `every@0m` and `every@0h`
+  // were accepted while `every@0m@12:00` was rejected -- and SCHEDULE_RE's
+  // `\d+` matches `0` happily, so nothing else caught it. An accepted
+  // `every@0m` gives the runner a zero interval, which makes its due check
+  // `now >= lastRun` and therefore true on every pass of a poll loop that
+  // ticks every POLL_INTERVAL_SECONDS (5 by default). One typo in this field
+  // dispatches a persona every five seconds forever, against a metered
+  // quota, with no error shown anywhere. Found from the runner side,
+  // 2026-08-14; agora-persona-runner#166 makes the runner refuse to act on
+  // it, but a schedule that silently never fires is its own bad failure and
+  // the honest place to say no is here, at creation, where SCHEDULE_ERROR
+  // already tells the caller what a schedule looks like.
+  if (!(minutes > 0)) return false;
+  if (anchor === undefined) return true;
+  return 1440 % minutes === 0;
 }
 
 export class HeartbeatStore {
