@@ -851,6 +851,53 @@ describe("agora public app", () => {
     expect(patched.status).toBe(400);
   });
 
+  // 2026-08-14, Edvard: "Did you fix the notification for agora heartbeats?
+  // So i can turn them off?" -- pushNotifications rides through create and
+  // patch so the runner can send that heartbeat's reply with push:false.
+  it("POST /heartbeats stores pushNotifications:false", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+      pushNotifications: false,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.heartbeat.pushNotifications).toBe(false);
+  });
+
+  it("POST /heartbeats leaves pushNotifications absent when not asked for", async () => {
+    // Absent is what the runner reads as "notify", so a heartbeat created
+    // without the field must not come back muted.
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    expect(created.body.heartbeat.pushNotifications).toBeUndefined();
+  });
+
+  it("PATCH /heartbeats/:id mutes and unmutes pushNotifications", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const muted = await request(app).patch(`/heartbeats/${id}`).send({ pushNotifications: false });
+    expect(muted.status).toBe(200);
+    expect(muted.body.heartbeat.pushNotifications).toBe(false);
+    // And back -- a mute you cannot undo is a worse bug than no mute.
+    const unmuted = await request(app).patch(`/heartbeats/${id}`).send({ pushNotifications: true });
+    expect(unmuted.body.heartbeat.pushNotifications).toBe(true);
+    expect((await deps.heartbeats.get(id))?.pushNotifications).toBe(true);
+  });
+
   it("POST /heartbeats/:id/run queues a forced run", async () => {
     const { persona, conversation } = await createHeartbeatFixtures();
     const created = await request(app).post("/heartbeats").send({
