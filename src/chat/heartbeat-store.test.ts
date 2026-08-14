@@ -119,6 +119,25 @@ describe("HeartbeatStore", () => {
     }
   });
 
+  it("isValidSchedule rejects a zero interval, anchored or not", () => {
+    // The runaway this closes: SCHEDULE_RE's `\\d+` matches `0`, and the
+    // `minutes > 0` check used to sit below the `anchor === undefined`
+    // return -- so `every@0m@12:00` was rejected while a bare `every@0m`
+    // sailed through. The runner turns that into a zero interval, whose
+    // due check is `now >= lastRun`, true on every pass of a 5-second poll
+    // loop. A persona dispatched every five seconds forever, from one typo
+    // in this field, with no error shown. Found 2026-08-14 from the runner
+    // side (agora-persona-runner#166).
+    for (const bad of ["every@0m", "every@0h", "every@0m@12:00", "every@0h@06:00"]) {
+      expect(isValidSchedule(bad)).toBe(false);
+    }
+    // The narrowness matters -- this must not start rejecting real
+    // schedules that merely look unusual.
+    for (const ok of ["every@1m", "every@1h", "every@40m", "every@6h@12:00"]) {
+      expect(isValidSchedule(ok)).toBe(true);
+    }
+  });
+
   it("isValidSchedule leaves unanchored and daily schedules alone", () => {
     for (const ok of ["daily@08:00", "every@7h", "every@25m", "every@6h"]) {
       expect(isValidSchedule(ok)).toBe(true);
