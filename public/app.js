@@ -9,6 +9,9 @@ function urlBase64ToUint8Array(base64String) {
 // used here purely for rendering sides, not as any kind of auth.
 const MY_SENDER = "Edvard";
 const POLL_INTERVAL_MS = 3000;
+// The sidebar changes far more slowly than an open conversation's messages,
+// and re-rendering it is a full innerHTML rebuild, so it gets its own timer.
+const LIST_POLL_INTERVAL_MS = 15000;
 // Timeout heuristic for the "no reply yet — retry" banner; the async
 // runner publishes no error signal, so this is inference, not detection.
 const RETRY_OFFER_MS = 45000;
@@ -264,9 +267,12 @@ themeToggle.addEventListener("click", () => {
 
 // --- Unread badge ----------------------------------------------------------
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && navigator.clearAppBadge) {
-    navigator.clearAppBadge().catch(() => {});
-  }
+  if (document.visibilityState !== "visible") return;
+  if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+  // This is the one that matters for a PWA you background rather than close:
+  // the timers may have been throttled or stopped for hours.
+  refreshConversationList();
+  fetchMessages();
 });
 
 // --- Minimal, safe markdown -------------------------------------------------
@@ -360,6 +366,28 @@ async function loadConversationList() {
   if (!ok) return;
   allConversations = data.conversations;
   renderDrawerList();
+}
+
+// What the drawer actually draws from. Anything not in here can change on the
+// server without the sidebar looking any different, so it must not force a
+// rebuild — the drawer is rebuilt with innerHTML and a rebuild drops focus and
+// scroll position.
+function conversationListSignature(conversations) {
+  return (conversations || [])
+    .map((c) => [c.id, c.rootId, c.name, c.archived ? 1 : 0, c.status, c.lastMessageAt, c.createdAt].join(" "))
+    .join("");
+}
+
+// Poll variant of loadConversationList: a conversation created on the server
+// (every cycle creates one) could otherwise never appear until a reload.
+async function refreshConversationList() {
+  const { ok, data } = await api("GET", "/conversations");
+  if (!ok) return false;
+  const next = data.conversations || [];
+  if (conversationListSignature(next) === conversationListSignature(allConversations)) return false;
+  allConversations = next;
+  renderDrawerList();
+  return true;
 }
 
 async function loadPersonas() {
@@ -2911,6 +2939,7 @@ async function boot() {
   await fetchMessages();
   renderDrawerList();
   setInterval(fetchMessages, POLL_INTERVAL_MS);
+  setInterval(refreshConversationList, LIST_POLL_INTERVAL_MS);
   subscribeToPush();
 }
 boot();
