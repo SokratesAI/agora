@@ -73,7 +73,7 @@ export interface HeartbeatUpdate {
   pushNotifications?: boolean;
 }
 
-const HHMM ="([01]?\\d|2[0-3]):[0-5]\\d";
+const HHMM = "([01]?\\d|2[0-3]):[0-5]\\d";
 /** Note that `cron@` is matched loosely here on purpose — the fields are
  * checked by isValidCron, not by this regex. So matching SCHEDULE_RE no
  * longer implies a schedule is valid; isValidSchedule is the only answer,
