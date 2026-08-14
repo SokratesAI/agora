@@ -53,7 +53,14 @@ beforeAll(() => {
     vi.fn(async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ models: [], conversations: [], personas: [], messages: [] }),
+      // `heartbeats` is here because a click on "Run now" schedules a real
+      // 1500ms re-render of the studio list, and that timer outlives the
+      // test that started it. Without the key, `renderHeartbeatStudio`
+      // throws on `data.heartbeats.length` inside a dangling timer -- an
+      // unhandled rejection attributed to whatever file happens to be
+      // running 1.5 seconds later. The real GET /heartbeats sends this key,
+      // so the fixture was simply wrong.
+      json: async () => ({ models: [], conversations: [], personas: [], messages: [], heartbeats: [] }),
     })),
   );
   vi.stubGlobal("setInterval", () => 0);
@@ -1035,6 +1042,11 @@ describe("heartbeat Run now gate", () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const [, run] = rowWithRun();
     run.click();
+    // Asserted before the wait, not only after it. `disabled` starts false,
+    // so waiting for false is satisfied the instant it is asked and would
+    // pass with the gate deleted -- the reviewer caught that this test
+    // pinned nothing. The true is what the gate has to produce.
+    expect(run.disabled).toBe(true);
     await vi.waitFor(() => expect(run.disabled).toBe(false));
     run.click();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));

@@ -1298,10 +1298,17 @@ function renderHeartbeatRow(heartbeat) {
     // where a second press would reach the server as a genuinely separate
     // request.
     //
-    // What neither gate is doing is preventing two runs -- the server
-    // already cannot start one (`forceRun` is a boolean and the runner's
-    // poll loop is single-threaded on one Recreate replica, so two presses
-    // set the same flag once). This is about him knowing what he pressed.
+    // What neither gate is doing is preventing two runs -- two presses
+    // cannot start two concurrent runs of the same heartbeat, for two
+    // reasons that are worth naming exactly, because the obvious one is
+    // out of date. `forceRun` is a boolean set by an idempotent PATCH, so
+    // pressing twice sets it once. And the runner refuses to spawn a run
+    // for a heartbeat whose previous run is still alive
+    // (`agora_runner/heartbeats.py`, the `_heartbeat_threads[...].is_alive()`
+    // check). It is NOT because the poll loop is single-threaded -- it has
+    // run each heartbeat on its own thread since 2026-08-08, and a comment
+    // in `src/server.ts` predating that still says otherwise. This is
+    // about him knowing what he pressed, not about a race.
     //
     // There is no `if (run.disabled) return;` here on purpose: a disabled
     // button dispatches no click at all, so that line was unreachable. The
