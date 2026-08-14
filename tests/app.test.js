@@ -966,3 +966,77 @@ describe("heartbeat push notification toggle", () => {
     expect(row.querySelector(".studio-item-name").textContent).not.toContain("🔕");
   });
 });
+
+// Gating "Run now" (Edvard, issues.md #6: "my butter fingers might easily
+// press that button twice very fast triggering two heartbeats in paralell").
+// These click the real button on a real rendered row, so a gate that is
+// wired to the wrong element fails here rather than on his phone.
+describe("heartbeat Run now gate", () => {
+  const runButtonOf = (row) =>
+    [...row.querySelectorAll("button")].find((b) => b.textContent === "Run now");
+
+  const rowWithRun = () => {
+    const row = globalThis.renderHeartbeatRow({
+      id: "hb1", name: "Nova", schedule: "every@60m", enabled: true,
+    });
+    return [row, runButtonOf(row)];
+  };
+
+  beforeEach(() => {
+    globalThis.fetch.mockClear();
+  });
+
+  it("asks before starting a cycle, and sends nothing when answered no", () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const [, run] = rowWithRun();
+    run.click();
+    expect(globalThis.confirm).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("names the heartbeat in the question, so the wrong row is visible", () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const [, run] = rowWithRun();
+    run.click();
+    expect(globalThis.confirm.mock.calls[0][0]).toContain("Nova");
+  });
+
+  it("posts the run once when answered yes", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const [, run] = rowWithRun();
+    run.click();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    expect(globalThis.fetch.mock.calls[0][0]).toContain("/heartbeats/hb1/run");
+  });
+
+  it("ignores a second press while the first is still in flight", async () => {
+    // The double-tap. `confirm` blocks the event loop in a real browser, so
+    // the press that gets through is the one arriving after it is answered
+    // and before the POST comes back -- which is exactly this.
+    let release;
+    globalThis.fetch.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        release = () => resolve({
+          ok: true, status: 200, json: async () => ({ status: "queued" }),
+        });
+      }),
+    );
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const [, run] = rowWithRun();
+    run.click();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    run.click();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.confirm).toHaveBeenCalledTimes(1);
+    release();
+  });
+
+  it("works again once the first press has answered", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const [, run] = rowWithRun();
+    run.click();
+    await vi.waitFor(() => expect(run.disabled).toBe(false));
+    run.click();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+  });
+});

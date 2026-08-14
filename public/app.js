@@ -1284,11 +1284,44 @@ function renderHeartbeatRow(heartbeat) {
   run.textContent = "Run now";
   run.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const { data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
-    if (data?.status === "already-running") {
-      setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
-    } else {
-      setStatus("Queued — runs within ~5s.");
+    // Edvard, issues.md #6: "my butter fingers might easily press that
+    // button twice very fast triggering two heartbeats in paralell. We need
+    // to gate the start of heartbeats."
+    //
+    // Two gates, because the accidental press and the doubled press are
+    // different accidents and neither gate catches the other. `confirm` is
+    // the one that catches a button hit on the way past -- a heartbeat run
+    // is a whole Nova cycle, the same weight as the Delete two buttons
+    // over, which has asked since it existed. `disabled` is the one that
+    // catches the second half of a double-tap: it holds from the moment the
+    // run is confirmed until the POST has answered, which is the window
+    // where a second press would reach the server as a genuinely separate
+    // request.
+    //
+    // What neither gate is doing is preventing two runs -- the server
+    // already cannot start one (`forceRun` is a boolean and the runner's
+    // poll loop is single-threaded on one Recreate replica, so two presses
+    // set the same flag once). This is about him knowing what he pressed.
+    //
+    // There is no `if (run.disabled) return;` here on purpose: a disabled
+    // button dispatches no click at all, so that line was unreachable. The
+    // mutation check is what showed it -- removing it failed nothing, which
+    // for a guard means it was guarding nothing.
+    if (!confirm(`Run "${heartbeat.name}" now? This starts a full cycle.`)) return;
+    run.disabled = true;
+    try {
+      const { data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
+      if (data?.status === "already-running") {
+        setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
+      } else {
+        setStatus("Queued — runs within ~5s.");
+      }
+    } finally {
+      // Re-enabled rather than left dead: the row is replaced by the
+      // re-render below anyway, and a failed POST that permanently disabled
+      // the only way to trigger a heartbeat would be worse than the double
+      // press this is guarding.
+      run.disabled = false;
     }
     setTimeout(renderHeartbeatStudio, 1500);
   });
