@@ -894,3 +894,34 @@ describe("conversation list polling (issues.md #3)", () => {
     expect(await globalThis.refreshConversationList()).toBe(false);
   });
 });
+
+// A raw control byte in the source makes the whole file *binary* to every
+// tool that sniffs before it reads. `public/app.js` carried a literal NUL
+// and a literal 0x01 as the separators inside conversationListSignature, and
+// the consequence was not cosmetic: ugrep classifies the file as binary and
+// silently prints nothing, exit 1 -- indistinguishable from "no matches". A
+// cycle grepping this file for `heartbeat` got zero hits against 244 real
+// ones and started filing a bug report about UI that was wired the whole
+// time. \u0000 escapes give a byte-identical string at runtime and keep the
+// file greppable, so there is no cost to paying this.
+describe("app.js stays plain text", () => {
+  it("has no raw control bytes, which would make grep skip the file", () => {
+    const raw = readFileSync(resolve(process.cwd(), "public", "app.js"));
+    const offenders = [];
+    for (let i = 0; i < raw.length; i += 1) {
+      const byte = raw[i];
+      // Tab, newline and carriage return are the legitimate ones.
+      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) {
+        offenders.push({ offset: i, byte: `0x${byte.toString(16).padStart(2, "0")}` });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("still separates signature fields with the same characters", () => {
+    const sig = globalThis.conversationListSignature([
+      { id: "a", rootId: null, name: "n", archived: false, status: "s", lastMessageAt: 1, createdAt: 2 },
+    ]);
+    expect(sig).toContain("\u0000");
+  });
+});
