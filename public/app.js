@@ -374,8 +374,8 @@ async function loadConversationList() {
 // scroll position.
 function conversationListSignature(conversations) {
   return (conversations || [])
-    .map((c) => [c.id, c.rootId, c.name, c.archived ? 1 : 0, c.status, c.lastMessageAt, c.createdAt].join(" "))
-    .join("");
+    .map((c) => [c.id, c.rootId, c.name, c.archived ? 1 : 0, c.status, c.lastMessageAt, c.createdAt].join("\u0000"))
+    .join("\u0001");
 }
 
 // Poll variant of loadConversationList: a conversation created on the server
