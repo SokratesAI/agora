@@ -1322,21 +1322,28 @@ function renderHeartbeatRow(heartbeat) {
       // branch and told Edvard "Queued — runs within ~5s." for a run that was
       // never queued. A 404 from a deleted heartbeat and a 500 from the store
       // both looked exactly like success.
-      const { ok, status, data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
-      if (!ok) {
-        setStatus(`Not started — ${data?.error || `the server answered ${status}`}.`, 5000);
-      } else if (data?.status === "already-running") {
-        setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
-      } else {
-        setStatus("Queued — runs within ~5s.");
-      }
-    } catch {
+      //
       // The other half, and the worse one: `fetch` rejects outright when the
       // phone has no route to Agora, so this handler threw before it said
       // anything at all. The press left no status message and no re-render --
       // silence, which reads as "nothing happened" when in fact the request
       // never left the device.
-      setStatus("Not started — could not reach Agora.", 5000);
+      //
+      // The `.catch` is on the call rather than around the block on purpose.
+      // A `try`/`catch` wide enough to hold the branches below would report a
+      // throw from `setStatus` or `formatRunningFor` as "could not reach
+      // Agora" -- naming the wrong cause, which is the exact failure this
+      // whole change exists to stop doing.
+      const sent = await api("POST", `/heartbeats/${heartbeat.id}/run`).catch(() => null);
+      if (!sent) {
+        setStatus("Not started — could not reach Agora.", 5000);
+      } else if (!sent.ok) {
+        setStatus(`Not started — ${sent.data?.error || `the server answered ${sent.status}`}.`, 5000);
+      } else if (sent.data?.status === "already-running") {
+        setStatus(`Already running${formatRunningFor(sent.data.runningSince)} — queued, starts when the current run finishes.`);
+      } else {
+        setStatus("Queued — runs within ~5s.");
+      }
     } finally {
       // Re-enabled rather than left dead: the row is replaced by the
       // re-render below anyway, and a failed POST that permanently disabled
