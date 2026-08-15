@@ -1052,3 +1052,80 @@ describe("heartbeat Run now gate", () => {
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
   });
 });
+
+// What the button SAYS after the press, which is a different question from
+// whether it gated the press. `api()` resolves on an HTTP error instead of
+// throwing, so the handler read only `data`, found no `already-running`, and
+// fell into the else -- reporting "Queued — runs within ~5s." for a run the
+// server had just refused. The network-level failure was worse: `fetch`
+// rejects, the handler threw, and the press produced no message at all.
+describe("heartbeat Run now reports the truth", () => {
+  const statusEl = () => document.getElementById("status");
+  const runButtonOf = (row) =>
+    [...row.querySelectorAll("button")].find((b) => b.textContent === "Run now");
+
+  const press = () => {
+    const row = globalThis.renderHeartbeatRow({
+      id: "hb1", name: "Nova", schedule: "every@60m", enabled: true,
+    });
+    runButtonOf(row).click();
+  };
+
+  beforeEach(() => {
+    globalThis.fetch.mockClear();
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    statusEl().textContent = "";
+  });
+
+  // The control for every assertion below: the same press against a server
+  // that accepts it must still produce the queued line. Without this, a fix
+  // that reported failure unconditionally would pass all three.
+  it("still says queued when the run is actually accepted", async () => {
+    globalThis.fetch.mockImplementationOnce(async () => ({
+      ok: true, status: 200, json: async () => ({ status: "queued" }),
+    }));
+    press();
+    await vi.waitFor(() => expect(statusEl().textContent).toBe("Queued — runs within ~5s."));
+  });
+
+  it("does not claim queued when the server refuses the run", async () => {
+    globalThis.fetch.mockImplementationOnce(async () => ({
+      ok: false, status: 404, json: async () => ({ error: "heartbeat not found" }),
+    }));
+    press();
+    await vi.waitFor(() => expect(statusEl().textContent).toContain("heartbeat not found"));
+    expect(statusEl().textContent).not.toContain("Queued");
+  });
+
+  it("names the status code when the error body carries no message", async () => {
+    globalThis.fetch.mockImplementationOnce(async () => ({
+      ok: false, status: 500, json: async () => { throw new Error("not json"); },
+    }));
+    press();
+    await vi.waitFor(() => expect(statusEl().textContent).toContain("500"));
+    expect(statusEl().textContent).not.toContain("Queued");
+  });
+
+  it("says the request never left the device when fetch rejects", async () => {
+    globalThis.fetch.mockImplementationOnce(async () => { throw new TypeError("Failed to fetch"); });
+    press();
+    await vi.waitFor(() => expect(statusEl().textContent).toContain("could not reach Agora"));
+  });
+
+  // The second casualty of the throw: `setTimeout(renderHeartbeatStudio, 1500)`
+  // sits after the try, so an unhandled rejection skipped it and the row was
+  // never refreshed either.
+  it("still re-renders the studio after a rejected fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch.mockImplementationOnce(async () => { throw new TypeError("Failed to fetch"); });
+      press();
+      await vi.waitFor(() => expect(statusEl().textContent).toContain("could not reach Agora"));
+      const before = globalThis.fetch.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(globalThis.fetch.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

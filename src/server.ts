@@ -938,9 +938,12 @@ export function createPublicApp(deps: ServerDeps): Express {
       return;
     }
     // Pressing "Run now" during a run does NOT start a second one -- the
-    // runner's poll loop is single-threaded and the deployment is Recreate
-    // with one replica, so the press is picked up only after the current
-    // cycle ends, up to ~45 minutes later. Saying "queued" for both cases
+    // runner refuses to spawn a run for a heartbeat whose previous run is
+    // still alive (`agora_runner/heartbeats.py`, the
+    // `_heartbeat_threads[hb_id].is_alive()` check), so the press is picked
+    // up only after the current cycle ends, up to ~45 minutes later. It is
+    // NOT because the poll loop is single-threaded: it has run each
+    // heartbeat on its own thread since 2026-08-08. Saying "queued" for both cases
     // is what made that invisible: Edvard, 2026-08-05, "i might spawn two
     // jobs in paralell without knowing".
     //

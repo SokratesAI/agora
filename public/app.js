@@ -1317,12 +1317,26 @@ function renderHeartbeatRow(heartbeat) {
     if (!confirm(`Run "${heartbeat.name}" now? This starts a full cycle.`)) return;
     run.disabled = true;
     try {
-      const { data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
-      if (data?.status === "already-running") {
+      // `ok`, not just `data`. `api()` resolves on an HTTP error rather than
+      // throwing, so reading only `data` sent every failure down the else
+      // branch and told Edvard "Queued — runs within ~5s." for a run that was
+      // never queued. A 404 from a deleted heartbeat and a 500 from the store
+      // both looked exactly like success.
+      const { ok, status, data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
+      if (!ok) {
+        setStatus(`Not started — ${data?.error || `the server answered ${status}`}.`, 5000);
+      } else if (data?.status === "already-running") {
         setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
       } else {
         setStatus("Queued — runs within ~5s.");
       }
+    } catch {
+      // The other half, and the worse one: `fetch` rejects outright when the
+      // phone has no route to Agora, so this handler threw before it said
+      // anything at all. The press left no status message and no re-render --
+      // silence, which reads as "nothing happened" when in fact the request
+      // never left the device.
+      setStatus("Not started — could not reach Agora.", 5000);
     } finally {
       // Re-enabled rather than left dead: the row is replaced by the
       // re-render below anyway, and a failed POST that permanently disabled
