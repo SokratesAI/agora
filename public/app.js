@@ -1317,9 +1317,35 @@ function renderHeartbeatRow(heartbeat) {
     if (!confirm(`Run "${heartbeat.name}" now? This starts a full cycle.`)) return;
     run.disabled = true;
     try {
-      const { data } = await api("POST", `/heartbeats/${heartbeat.id}/run`);
-      if (data?.status === "already-running") {
-        setStatus(`Already running${formatRunningFor(data.runningSince)} — queued, starts when the current run finishes.`);
+      // `ok`, not just `data`. `api()` resolves on an HTTP error rather than
+      // throwing, so reading only `data` sent every failure down the else
+      // branch and told Edvard "Queued — runs within ~5s." for a run that was
+      // never queued. The reachable cases are a 404 -- the route's own answer
+      // for a heartbeat deleted in another tab -- and whatever the ingress
+      // returns while the pod is restarting, typically a 502 or 503. A 500
+      // from this route specifically is NOT one of them: it has no try/catch
+      // and Express 4 does not turn a rejected async handler into a response,
+      // so a store failure kills the process and reaches the phone as a
+      // rejected fetch, which is the branch below.
+      //
+      // The other half, and the worse one: `fetch` rejects outright when the
+      // phone has no route to Agora, so this handler threw before it said
+      // anything at all. The press left no status message and no re-render --
+      // silence, which reads as "nothing happened" when in fact the request
+      // never left the device.
+      //
+      // The `.catch` is on the call rather than around the block on purpose.
+      // A `try`/`catch` wide enough to hold the branches below would report a
+      // throw from `setStatus` or `formatRunningFor` as "could not reach
+      // Agora" -- naming the wrong cause, which is the exact failure this
+      // whole change exists to stop doing.
+      const sent = await api("POST", `/heartbeats/${heartbeat.id}/run`).catch(() => null);
+      if (!sent) {
+        setStatus("Not started — could not reach Agora.", 5000);
+      } else if (!sent.ok) {
+        setStatus(`Not started — ${sent.data?.error || `the server answered ${sent.status}`}.`, 5000);
+      } else if (sent.data?.status === "already-running") {
+        setStatus(`Already running${formatRunningFor(sent.data.runningSince)} — queued, starts when the current run finishes.`);
       } else {
         setStatus("Queued — runs within ~5s.");
       }
@@ -1330,7 +1356,13 @@ function renderHeartbeatRow(heartbeat) {
       // press this is guarding.
       run.disabled = false;
     }
-    setTimeout(renderHeartbeatStudio, 1500);
+    // The `.catch` is new alongside the one above, and it exists because of
+    // it. `renderHeartbeatStudio` awaits `api()` with no catch of its own, so
+    // with Agora unreachable this refresh rejects too -- and before this
+    // change it was never scheduled on that path at all, because the press
+    // threw first. Reporting it again 1.5s later would just repeat the line
+    // the press already put on screen, so this one is deliberately silent.
+    setTimeout(() => renderHeartbeatStudio().catch(() => {}), 1500);
   });
   const toggle = document.createElement("button");
   toggle.type = "button";
