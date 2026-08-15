@@ -1320,8 +1320,13 @@ function renderHeartbeatRow(heartbeat) {
       // `ok`, not just `data`. `api()` resolves on an HTTP error rather than
       // throwing, so reading only `data` sent every failure down the else
       // branch and told Edvard "Queued — runs within ~5s." for a run that was
-      // never queued. A 404 from a deleted heartbeat and a 500 from the store
-      // both looked exactly like success.
+      // never queued. The reachable cases are a 404 -- the route's own answer
+      // for a heartbeat deleted in another tab -- and whatever the ingress
+      // returns while the pod is restarting, typically a 502 or 503. A 500
+      // from this route specifically is NOT one of them: it has no try/catch
+      // and Express 4 does not turn a rejected async handler into a response,
+      // so a store failure kills the process and reaches the phone as a
+      // rejected fetch, which is the branch below.
       //
       // The other half, and the worse one: `fetch` rejects outright when the
       // phone has no route to Agora, so this handler threw before it said
@@ -1351,7 +1356,13 @@ function renderHeartbeatRow(heartbeat) {
       // press this is guarding.
       run.disabled = false;
     }
-    setTimeout(renderHeartbeatStudio, 1500);
+    // The `.catch` is new alongside the one above, and it exists because of
+    // it. `renderHeartbeatStudio` awaits `api()` with no catch of its own, so
+    // with Agora unreachable this refresh rejects too -- and before this
+    // change it was never scheduled on that path at all, because the press
+    // threw first. Reporting it again 1.5s later would just repeat the line
+    // the press already put on screen, so this one is deliberately silent.
+    setTimeout(() => renderHeartbeatStudio().catch(() => {}), 1500);
   });
   const toggle = document.createElement("button");
   toggle.type = "button";

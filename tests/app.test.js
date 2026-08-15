@@ -18,7 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Resolved from the project root, not `import.meta.url`: under the jsdom
 // environment that is an http:// URL, so the usual relative-to-this-file
@@ -1071,17 +1071,42 @@ describe("heartbeat Run now reports the truth", () => {
     runButtonOf(row).click();
   };
 
+  // Routed on the URL rather than queued with `mockImplementationOnce`.
+  // `globalThis.fetch` is one mock shared by the whole file and nothing
+  // cancels the 1500ms studio re-render the describe above leaves running, so
+  // a queued implementation can be eaten by a stray `GET /heartbeats` that
+  // lands first -- which would answer the POST under test with a success body
+  // and fail the run for a reason that has nothing to do with the code. This
+  // shape has no order to get wrong.
+  const answerRunWith = (impl) => {
+    globalThis.fetch.mockImplementation(async (url, ...rest) => {
+      if (String(url).includes("/run")) return impl(url, ...rest);
+      return { ok: true, status: 200, json: async () => ({ heartbeats: [] }) };
+    });
+  };
+
   beforeEach(() => {
     globalThis.fetch.mockClear();
     vi.stubGlobal("confirm", vi.fn(() => true));
     statusEl().textContent = "";
   });
 
+  // `mockClear` keeps implementations, so without this the last test's
+  // routing would outlive the block and answer the rest of the file.
+  afterEach(() => {
+    globalThis.fetch.mockReset();
+    globalThis.fetch.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ models: [], conversations: [], personas: [], messages: [], heartbeats: [] }),
+    }));
+  });
+
   // The control for every assertion below: the same press against a server
   // that accepts it must still produce the queued line. Without this, a fix
   // that reported failure unconditionally would pass all three.
   it("still says queued when the run is actually accepted", async () => {
-    globalThis.fetch.mockImplementationOnce(async () => ({
+    answerRunWith(async () => ({
       ok: true, status: 200, json: async () => ({ status: "queued" }),
     }));
     press();
@@ -1089,7 +1114,7 @@ describe("heartbeat Run now reports the truth", () => {
   });
 
   it("does not claim queued when the server refuses the run", async () => {
-    globalThis.fetch.mockImplementationOnce(async () => ({
+    answerRunWith(async () => ({
       ok: false, status: 404, json: async () => ({ error: "heartbeat not found" }),
     }));
     press();
@@ -1098,16 +1123,16 @@ describe("heartbeat Run now reports the truth", () => {
   });
 
   it("names the status code when the error body carries no message", async () => {
-    globalThis.fetch.mockImplementationOnce(async () => ({
-      ok: false, status: 500, json: async () => { throw new Error("not json"); },
+    answerRunWith(async () => ({
+      ok: false, status: 502, json: async () => { throw new Error("not json"); },
     }));
     press();
-    await vi.waitFor(() => expect(statusEl().textContent).toContain("500"));
+    await vi.waitFor(() => expect(statusEl().textContent).toContain("502"));
     expect(statusEl().textContent).not.toContain("Queued");
   });
 
   it("says the request never left the device when fetch rejects", async () => {
-    globalThis.fetch.mockImplementationOnce(async () => { throw new TypeError("Failed to fetch"); });
+    answerRunWith(async () => { throw new TypeError("Failed to fetch"); });
     press();
     await vi.waitFor(() => expect(statusEl().textContent).toContain("could not reach Agora"));
   });
@@ -1118,7 +1143,7 @@ describe("heartbeat Run now reports the truth", () => {
   it("still re-renders the studio after a rejected fetch", async () => {
     vi.useFakeTimers();
     try {
-      globalThis.fetch.mockImplementationOnce(async () => { throw new TypeError("Failed to fetch"); });
+      answerRunWith(async () => { throw new TypeError("Failed to fetch"); });
       press();
       await vi.waitFor(() => expect(statusEl().textContent).toContain("could not reach Agora"));
       const before = globalThis.fetch.mock.calls.length;

@@ -939,8 +939,10 @@ export function createPublicApp(deps: ServerDeps): Express {
     }
     // Pressing "Run now" during a run does NOT start a second one -- the
     // runner refuses to spawn a run for a heartbeat whose previous run is
-    // still alive (`agora_runner/heartbeats.py`, the
-    // `_heartbeat_threads[hb_id].is_alive()` check), so the press is picked
+    // still alive -- `agora_runner/heartbeats.py` in the separate
+    // `SokratesAI/agora-persona-runner` repo, the
+    // `_heartbeat_threads[hb_id].is_alive()` check, not verifiable from this
+    // checkout -- so the press is picked
     // up only after the current cycle ends, up to ~45 minutes later. It is
     // NOT because the poll loop is single-threaded: it has run each
     // heartbeat on its own thread since 2026-08-08. Saying "queued" for both cases
