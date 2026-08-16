@@ -14,13 +14,20 @@ export interface Config {
    * as a warning at startup) so a missing secret can't wedge a deploy. */
   agentToken: string | undefined;
   /** Window in which a notification is recorded but not pushed to the phone.
-   * Defaults to 22:00–07:00 — the hours Edvard told us he sleeps
-   * (2026-08-08); set QUIET_HOURS_START to an empty string to turn
-   * it off entirely. */
+   * Defaults to the configured overnight hours; set QUIET_HOURS_START to an
+   * empty string to turn it off entirely. */
   quietHours: QuietHours | undefined;
-  /** Wall clock the window is read against — Edvard lives in Oslo. */
+  /** Wall clock the window is read against. */
   quietHoursTimeZone: string;
 }
+
+/** Contact address the push service is given for this deployment.
+ * This repo is public, so the fallback must not be anyone's personal
+ * mailbox — it used to be Edvard's, which meant his private address was
+ * readable by anyone and permanently in the git history. The project
+ * account is already visible in every commit's metadata, so exposing it
+ * here costs nothing. Set VAPID_SUBJECT to override per deployment. */
+export const DEFAULT_VAPID_SUBJECT = "mailto:sokratesai.mail@gmail.com";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
@@ -29,7 +36,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir: env.DATA_DIR ?? "/data",
     vapidPublicKey: env.VAPID_PUBLIC_KEY,
     vapidPrivateKey: env.VAPID_PRIVATE_KEY,
-    vapidSubject: env.VAPID_SUBJECT ?? "mailto:edvardgbakken@gmail.com",
+    vapidSubject: env.VAPID_SUBJECT ?? DEFAULT_VAPID_SUBJECT,
     runnerUrl: env.RUNNER_URL,
     agentToken: env.AGORA_AGENT_TOKEN,
     quietHours: parseQuietHours(
