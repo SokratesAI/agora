@@ -78,8 +78,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - name: Log in to GHCR
@@ -106,21 +104,26 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # Commits the new image digest to agora-config, which ArgoCD's SCM Provider
-  # generator auto-deploys — no platform-config PR, no manual step. Migrated
-  # 2026-07-27 from the old "print the digest, bump platform-config by hand"
-  # pattern: that existed because GH_BOT_TOKEN (broadly scoped) was too
-  # powerful for a service this small (see whatsapp-bridge's build.yaml for
-  # the same reasoning, still true there). The sokrates-ci-deployer GitHub
-  # App fixes that — this step's installation token is scoped to ONLY
-  # agora-config, never anything broader. ORG_APP_ID/ORG_APP_PRIVATE_KEY are
-  # repo-scoped Actions secrets on this repo (not org-level — GitHub gates
-  # those behind a paid plan for private repos). See the vault's
-  # Platform-Product-Catalog/_context.md for the full pattern.
-  update-manifest:
-    needs: build-push
-    runs-on: ubuntu-latest
-    steps:
+      # Commits the new image digest to agora-config, which ArgoCD's SCM Provider
+      # generator auto-deploys — no platform-config PR, no manual step. Migrated
+      # 2026-07-27 from the old "print the digest, bump platform-config by hand"
+      # pattern: that existed because GH_BOT_TOKEN (broadly scoped) was too
+      # powerful for a service this small (see whatsapp-bridge's build.yaml for
+      # the same reasoning, still true there). The sokrates-ci-deployer GitHub
+      # App fixes that — this step's installation token is scoped to ONLY
+      # agora-config, never anything broader. ORG_APP_ID/ORG_APP_PRIVATE_KEY are
+      # repo-scoped Actions secrets on this repo (not org-level — GitHub gates
+      # those behind a paid plan for private repos). See the vault's
+      # Platform-Product-Catalog/_context.md for the full pattern.
+      #
+      # This was a third job, `update-manifest`, until Cycle 224. It is a `sed`
+      # and a `git push` — a few seconds of work billed as a whole minute on
+      # every merge, because GitHub rounds per job, against an Actions allowance
+      # the org is roughly 3x over (idea #73). It only ever ran after
+      # `build-push` succeeded, so running it here as that job's last step is
+      # the same order for a minute less. The config repo goes into `.config`
+      # rather than the workspace root, because unlike the old job this one
+      # already has this repo's own source checked out and must not clobber it.
       - name: Generate installation token scoped to agora-config only
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -133,15 +136,17 @@ jobs:
         with:
           repository: ${{ env.CONFIG_REPO }}
           token: ${{ steps.app-token.outputs.token }}
+          path: .config
       - name: Update image digest in manifest.yaml
+        working-directory: .config
         run: |
-          sed -i "s|image: .*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-push.outputs.digest }}|" manifest.yaml
+          sed -i "s|image: .*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}|" manifest.yaml
           git config user.name "sokratesai-repo-committer[bot]"
           git config user.email "sokratesai-repo-committer[bot]@users.noreply.github.com"
           git add manifest.yaml
           if git diff --staged --quiet; then
             echo "no manifest change, skipping commit"
           else
-            git commit -m "Update image to ${{ needs.build-push.outputs.digest }}"
+            git commit -m "Update image to ${{ steps.build.outputs.digest }}"
             git push
           fi
