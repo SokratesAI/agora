@@ -31,6 +31,10 @@ const drawerSearchResults = $("drawer-search-results");
 const drawerListWrap = $("drawer-list-wrap");
 const drawerList = $("drawer-list");
 const drawerNewChat = $("drawer-new-chat");
+const drawerNewFolder = $("drawer-new-folder");
+const folderSheetScrim = $("folder-sheet-scrim");
+const folderSheetTitle = $("folder-sheet-title");
+const folderSheetList = $("folder-sheet-list");
 const themeToggle = $("theme-toggle");
 const headerNewChatBtn = $("header-new-chat");
 const headerOverflowBtn = $("header-overflow");
@@ -48,6 +52,7 @@ const sheetPauseLabel = $("sheet-pause-label");
 const sheetArchive = $("sheet-archive");
 const sheetArchiveLabel = $("sheet-archive-label");
 const sheetDelete = $("sheet-delete");
+const sheetMove = $("sheet-move");
 
 const msgActionSheetScrim = $("msg-action-sheet-scrim");
 const msgActionSheet = $("msg-action-sheet");
@@ -229,6 +234,12 @@ let modelCatalogById = new Map();
 let latestModels = [];
 let defaultModelId = "";
 let allConversations = [];
+let allFolders = [];
+// Which folders are collapsed, persisted so a folder Edvard closed on his
+// phone stays closed across a reload — the switcher is the one list he
+// opens every time, and re-collapsing 30 heartbeat conversations by hand
+// on every visit would undo the point of having folders at all.
+const collapsedFolders = new Set(readCollapsedFolders());
 let allPersonas = [];
 let sheetTargetId = null;
 let editLinks = [];
@@ -363,10 +374,36 @@ async function api(method, path, body) {
 
 // --- Data loading -----------------------------------------------------------
 async function loadConversationList() {
+  await loadFolders();
   const { ok, data } = await api("GET", "/conversations");
   if (!ok) return;
   allConversations = data.conversations;
   renderDrawerList();
+}
+
+async function loadFolders() {
+  const { ok, data } = await api("GET", "/folders");
+  if (!ok) return;
+  allFolders = data.folders || [];
+}
+
+function readCollapsedFolders() {
+  try {
+    const raw = localStorage.getItem("agora-collapsed-folders");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsedFolders() {
+  try {
+    localStorage.setItem("agora-collapsed-folders", JSON.stringify([...collapsedFolders]));
+  } catch {
+    // Private-mode / quota — the folds just stop persisting, which is the
+    // behaviour before this existed. Never worth failing a render over.
+  }
 }
 
 // What the drawer actually draws from. Anything not in here can change on the
@@ -375,7 +412,7 @@ async function loadConversationList() {
 // scroll position.
 function conversationListSignature(conversations) {
   return (conversations || [])
-    .map((c) => [c.id, c.rootId, c.name, c.archived ? 1 : 0, c.status, c.lastMessageAt, c.createdAt].join("\u0000"))
+    .map((c) => [c.id, c.rootId, c.name, c.archived ? 1 : 0, c.status, c.lastMessageAt, c.createdAt, c.folderId || ""].join("\u0000"))
     .join("\u0001");
 }
 
@@ -386,6 +423,12 @@ async function refreshConversationList() {
   if (!ok) return false;
   const next = data.conversations || [];
   if (conversationListSignature(next) === conversationListSignature(allConversations)) return false;
+  // A conversation the runner just filed can name a folder this page has
+  // never seen — refresh the folder list before drawing it, or the row
+  // renders at the top level and looks like the move failed.
+  if (next.some((c) => c.folderId && !allFolders.some((f) => f.id === c.folderId))) {
+    await loadFolders();
+  }
   allConversations = next;
   renderDrawerList();
   return true;
@@ -541,10 +584,10 @@ drawerOpenBtn.addEventListener("click", openDrawer);
 drawerCloseBtn.addEventListener("click", closeDrawer);
 drawerScrim.addEventListener("click", closeDrawer);
 
-function renderDrawerRow(conversation, forked) {
+function renderDrawerRow(conversation, forked, inFolder) {
   const row = document.createElement("div");
   row.className =
-    `drawer-row ${conversation.id === currentConversationId ? "active" : ""} ${forked ? "forked" : ""}`;
+    `drawer-row ${conversation.id === currentConversationId ? "active" : ""} ${forked ? "forked" : ""} ${inFolder ? "in-folder" : ""}`;
   const nameEl = document.createElement("span");
   nameEl.className = "drawer-row-name";
   nameEl.textContent = (forked ? "↳ " : "") + conversation.name + (conversation.archived ? " · Archived" : "");
@@ -568,13 +611,12 @@ function renderDrawerRow(conversation, forked) {
   return row;
 }
 
-function renderDrawerList() {
-  drawerList.innerHTML = "";
-  // Group by lineage (rootId, Decisions/0004): root first, its forks
-  // indented under it; groups ordered by their most recent activity.
+// Lineage grouping (rootId, Decisions/0004): root first, its forks indented
+// under it; groups ordered by their most recent activity. Folders sit above
+// this, not instead of it — a fork stays under its root wherever it is filed.
+function appendLineageGroups(target, conversations, inFolder) {
   const groups = new Map();
-  for (const conversation of allConversations) {
-    if (conversation.archived) continue;
+  for (const conversation of conversations) {
     const key = conversation.rootId || conversation.id;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(conversation);
@@ -589,12 +631,73 @@ function renderDrawerList() {
       return Date.parse(b.lastMessageAt || 0) - Date.parse(a.lastMessageAt || 0);
     });
     const root = group.find((c) => c.id === c.rootId);
-    if (root) drawerList.appendChild(renderDrawerRow(root, false));
+    if (root) target.appendChild(renderDrawerRow(root, false, inFolder));
     for (const conversation of group) {
       if (root && conversation.id === root.id) continue;
-      drawerList.appendChild(renderDrawerRow(conversation, Boolean(root)));
+      target.appendChild(renderDrawerRow(conversation, Boolean(root), inFolder));
     }
   }
+}
+
+function renderFolderHeader(folder, count) {
+  const collapsed = collapsedFolders.has(folder.id);
+  const header = document.createElement("div");
+  header.className = "drawer-folder";
+  const twisty = document.createElement("span");
+  twisty.className = "drawer-folder-twisty";
+  twisty.textContent = collapsed ? "▸" : "▾";
+  header.appendChild(twisty);
+  const nameEl = document.createElement("span");
+  nameEl.className = "drawer-folder-name";
+  nameEl.textContent = folder.name;
+  header.appendChild(nameEl);
+  const countEl = document.createElement("span");
+  countEl.className = "drawer-folder-count";
+  countEl.textContent = String(count);
+  header.appendChild(countEl);
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "drawer-row-more";
+  more.textContent = "⋮";
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openFolderMenu(folder);
+  });
+  header.appendChild(more);
+  header.addEventListener("click", () => {
+    if (collapsed) collapsedFolders.delete(folder.id);
+    else collapsedFolders.add(folder.id);
+    saveCollapsedFolders();
+    renderDrawerList();
+  });
+  return header;
+}
+
+function renderDrawerList() {
+  drawerList.innerHTML = "";
+  const visible = allConversations.filter((c) => !c.archived);
+  const known = new Set(allFolders.map((f) => f.id));
+  // A conversation whose folder is gone shows at the top level rather than
+  // disappearing — losing a folder must never lose a conversation.
+  const byFolder = new Map();
+  const topLevel = [];
+  for (const conversation of visible) {
+    if (conversation.folderId && known.has(conversation.folderId)) {
+      if (!byFolder.has(conversation.folderId)) byFolder.set(conversation.folderId, []);
+      byFolder.get(conversation.folderId).push(conversation);
+    } else {
+      topLevel.push(conversation);
+    }
+  }
+  // Folders first, alphabetically (the server already sorts them), then
+  // everything unfiled — so the fixed part of the list stays put while the
+  // activity-ordered part moves around underneath it.
+  for (const folder of allFolders) {
+    const members = byFolder.get(folder.id) || [];
+    drawerList.appendChild(renderFolderHeader(folder, members.length));
+    if (!collapsedFolders.has(folder.id)) appendLineageGroups(drawerList, members, true);
+  }
+  appendLineageGroups(drawerList, topLevel, false);
   if (!drawerList.children.length) {
     const hint = document.createElement("div");
     hint.className = "studio-empty";
@@ -725,6 +828,115 @@ sheetDelete.addEventListener("click", async () => {
   await loadConversationList();
   autoSelectConversation();
   fetchMessages();
+});
+
+// --- Folders (ideas.md #5) ----------------------------------------------------
+function closeFolderSheet() {
+  folderSheetScrim.hidden = true;
+}
+folderSheetScrim.addEventListener("click", (e) => {
+  if (e.target === folderSheetScrim) closeFolderSheet();
+});
+
+function folderSheetRow(label, onClick, danger) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = `sheet-row ${danger ? "danger" : ""}`;
+  row.textContent = label;
+  row.addEventListener("click", onClick);
+  return row;
+}
+
+async function createFolder() {
+  const name = prompt("Folder name");
+  if (!name || !name.trim()) return null;
+  const { ok, data } = await api("POST", "/folders", { name: name.trim() });
+  if (!ok) {
+    setStatus("Could not create that folder.", 4000);
+    return null;
+  }
+  await loadFolders();
+  renderDrawerList();
+  return data.folder;
+}
+
+drawerNewFolder.addEventListener("click", () => {
+  createFolder();
+});
+
+/** Move picker for one conversation: every folder, plus the top level, plus
+ * a way to make a folder without leaving the sheet. */
+function openMoveSheet(conversationId) {
+  const conversation = allConversations.find((c) => c.id === conversationId);
+  folderSheetTitle.textContent = `Move “${conversation?.name || "conversation"}” to`;
+  folderSheetList.innerHTML = "";
+  const move = async (folderId) => {
+    closeFolderSheet();
+    const { ok } = await api("PATCH", `/conversations/${conversationId}`, { folderId });
+    if (!ok) {
+      setStatus("Could not move that conversation.", 4000);
+      return;
+    }
+    await loadConversationList();
+  };
+  if (conversation?.folderId) {
+    folderSheetList.appendChild(folderSheetRow("↑ Top level", () => move(null)));
+  }
+  for (const folder of allFolders) {
+    if (folder.id === conversation?.folderId) continue;
+    folderSheetList.appendChild(folderSheetRow(folder.name, () => move(folder.id)));
+  }
+  folderSheetList.appendChild(
+    folderSheetRow("＋ New folder…", async () => {
+      const folder = await createFolder();
+      if (folder) await move(folder.id);
+      else closeFolderSheet();
+    }),
+  );
+  folderSheetScrim.hidden = false;
+}
+
+function openFolderMenu(folder) {
+  folderSheetTitle.textContent = folder.name;
+  folderSheetList.innerHTML = "";
+  folderSheetList.appendChild(
+    folderSheetRow("Rename folder", async () => {
+      closeFolderSheet();
+      const name = prompt("Folder name", folder.name);
+      if (!name || !name.trim()) return;
+      const { ok } = await api("PATCH", `/folders/${folder.id}`, { name: name.trim() });
+      if (!ok) {
+        setStatus("Could not rename that folder.", 4000);
+        return;
+      }
+      await loadConversationList();
+    }),
+  );
+  folderSheetList.appendChild(
+    folderSheetRow(
+      "Delete folder",
+      async () => {
+        closeFolderSheet();
+        if (!confirm("Delete this folder? The conversations in it move back to the top level.")) return;
+        const { ok } = await api("DELETE", `/folders/${folder.id}`);
+        if (!ok) {
+          setStatus("Could not delete that folder.", 4000);
+          return;
+        }
+        collapsedFolders.delete(folder.id);
+        saveCollapsedFolders();
+        await loadConversationList();
+      },
+      true,
+    ),
+  );
+  folderSheetScrim.hidden = false;
+}
+
+sheetMove.addEventListener("click", () => {
+  const id = sheetTargetId;
+  closeActionSheet();
+  openMoveSheet(id);
 });
 
 sheetAsk.addEventListener("click", () => {

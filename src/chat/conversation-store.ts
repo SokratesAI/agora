@@ -116,6 +116,11 @@ export interface Conversation {
   /** Lineage id for fork grouping — equals `id` unless forked
    * (Decisions/0004 amendment: group by lineage, not persona). */
   rootId: string;
+  /** Folder in the switcher (ideas.md #5), or absent for the top level.
+   * Deliberately not validated against FolderStore on read: a folder
+   * deleted out from under a conversation leaves it at the top level
+   * rather than hiding it, which is the safe direction to fail in. */
+  folderId?: string;
   forkedFrom?: { conversationId: string; messageId: string };
   createdAt: string;
   messages: Message[];
@@ -139,6 +144,9 @@ export interface ConversationUpdate {
   tags?: string[];
   rootId?: string;
   stickyFallback?: boolean;
+  /** `null` moves the conversation back to the top level — distinct from
+   * omitting the field, which leaves it where it is. */
+  folderId?: string | null;
 }
 
 export interface SearchResult {
@@ -482,7 +490,12 @@ export class ConversationStore {
   private async updateWith(id: string, updates: ConversationUpdate): Promise<Conversation | null> {
     const conversation = await this.get(id);
     if (!conversation) return null;
-    Object.assign(conversation, updates);
+    const { folderId, ...rest } = updates;
+    Object.assign(conversation, rest);
+    // `null` is "move to the top level", which is an absent key rather than
+    // a stored null — Object.assign cannot express the difference.
+    if (folderId === null) delete conversation.folderId;
+    else if (folderId !== undefined) conversation.folderId = folderId;
     await this.writeFile(conversation);
     return conversation;
   }

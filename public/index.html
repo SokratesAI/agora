@@ -169,6 +169,12 @@
       color: #fff; padding: 0.55rem 0.8rem;
       font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
     }
+    #drawer-new-folder {
+      display: flex; align-items: center; gap: 0.5rem;
+      border-radius: 0.7rem; border: 1px solid var(--border); background: none;
+      color: var(--text-dim); padding: 0.5rem 0.8rem;
+      font: inherit; font-size: 0.85rem; cursor: pointer;
+    }
     .drawer-section-label {
       font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
       color: var(--text-dimmer); padding: 0.6rem 0.5rem 0.2rem;
@@ -196,6 +202,23 @@
       font-size: 1rem; padding: 0.2rem 0.4rem; cursor: pointer; border-radius: 0.4rem;
     }
     .drawer-row-more:hover { background: var(--border); }
+    /* Folders (ideas.md #5). A folder row is the same height and shape as a
+       conversation row so the list still reads as one list, with the twisty
+       carrying the only structural difference. */
+    .drawer-folder {
+      display: flex; align-items: center; gap: 0.4rem;
+      border-radius: 0.6rem; padding: 0.55rem 0.5rem; cursor: pointer;
+      color: var(--text-dim); font-size: 0.88rem;
+    }
+    .drawer-folder:hover { background: var(--bg-input); }
+    .drawer-folder-twisty { flex: none; width: 0.8rem; font-size: 0.7rem; }
+    .drawer-folder-name {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-weight: 600;
+    }
+    .drawer-folder-count { flex: none; font-size: 0.72rem; color: var(--text-dimmer); }
+    .drawer-row.in-folder { padding-left: 1.4rem; }
+    .drawer-row.in-folder.forked { padding-left: 2.3rem; }
     /* Same missing-scroll bug as drawer-list-wrap above -- mutually exclusive
        with it (app.js toggles `hidden` on whichever isn't active), so this
        is the drawer's scrollable region whenever a search is active. */
@@ -219,6 +242,7 @@
       box-shadow: 0 10px 40px rgba(0,0,0,0.35);
     }
     #action-sheet { top: 3.6rem; right: 0.75rem; }
+    #folder-sheet { top: 3.6rem; right: 0.75rem; max-height: 70vh; overflow-y: auto; }
     #msg-action-sheet { top: 0; left: 0; }
     .sheet-title { font-size: 0.78rem; color: var(--text-dim); padding: 0.55rem 0.7rem 0.3rem; font-weight: 600; }
     .sheet-row {
@@ -627,6 +651,7 @@
     </div>
     <input id="drawer-search-input" type="text" placeholder="Search conversations and messages" />
     <button type="button" id="drawer-new-chat">＋ New chat</button>
+    <button type="button" id="drawer-new-folder">＋ New folder</button>
     <div id="drawer-search-results" hidden></div>
     <div id="drawer-list-wrap">
       <div class="drawer-section-label">Conversations</div>
@@ -653,6 +678,10 @@
         <span class="sheet-icon"><svg viewBox="0 0 24 24" width="1rem" height="1rem" fill="currentColor"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z"/></svg></span>
         <span id="sheet-pause-label">Pause replies</span>
       </button>
+      <button type="button" class="sheet-row" id="sheet-move">
+        <span class="sheet-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h5l1.6 2h10.4a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H3.5A1.5 1.5 0 0 1 2 18V8a1.5 1.5 0 0 1 1.5-1.5Z"/></svg></span>
+        Move to folder
+      </button>
       <button type="button" class="sheet-row" id="sheet-archive">
         <span class="sheet-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="4.5" rx="1.2"/><path d="M4.5 8.5V18a1.8 1.8 0 0 0 1.8 1.8h11.4a1.8 1.8 0 0 0 1.8-1.8V8.5"/><path d="M10 13h4"/></svg></span>
         <span id="sheet-archive-label">Archive</span>
@@ -661,6 +690,16 @@
         <span class="sheet-icon"><svg viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.8A1.8 1.8 0 0 1 10.8 3h2.4A1.8 1.8 0 0 1 15 4.8V7"/><path d="M6 7l1 12.5A1.8 1.8 0 0 0 8.8 21h6.4a1.8 1.8 0 0 0 1.8-1.5L18 7"/><path d="M10 11v6M14 11v6"/></svg></span>
         Delete
       </button>
+    </div>
+  </div>
+
+  <!-- Folder menu: doubles as the move-to-folder picker and the
+       rename/delete menu for one folder, since both are a title plus a list
+       of rows built in app.js (ideas.md #5). -->
+  <div class="sheet-scrim" id="folder-sheet-scrim" hidden>
+    <div class="sheet" id="folder-sheet">
+      <div class="sheet-title" id="folder-sheet-title">Folders</div>
+      <div id="folder-sheet-list"></div>
     </div>
   </div>
 

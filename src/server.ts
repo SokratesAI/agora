@@ -26,6 +26,7 @@ import type { WorkflowStore, WorkflowUpdate, Step } from "./chat/workflow-store.
 import { wouldCreateCycle } from "./chat/workflow-store.js";
 import type { AuditStore } from "./chat/audit-store.js";
 import { MAX_ATTACHMENT_BYTES, type AttachmentStore } from "./chat/attachment-store.js";
+import type { FolderStore } from "./chat/folder-store.js";
 import { MODEL_CATALOG } from "./models.js";
 import {
   notificationsSent,
@@ -62,6 +63,7 @@ export interface ServerDeps {
   workflows: WorkflowStore;
   audit: AuditStore;
   attachments: AttachmentStore;
+  folders: FolderStore;
   webPush: WebPushSender;
   logger: pino.Logger;
   /** undefined → ask/preview return 503 (RUNNER_URL not configured). */
@@ -184,6 +186,7 @@ async function enrichConversation(
     archived: conversation.archived,
     stickyFallback: conversation.stickyFallback,
     rootId: conversation.rootId,
+    folderId: conversation.folderId,
     forkedFrom: conversation.forkedFrom,
     createdAt: conversation.createdAt,
     ...(conversation.lastMessageAt !== undefined ? { lastMessageAt: conversation.lastMessageAt } : {}),
@@ -495,6 +498,58 @@ function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
   });
 }
 
+/** Folders for the conversation switcher (ideas.md #5). Registered on both
+ * apps for the same reason the conversation create/update routes are: the
+ * drawer needs them, and the runner files each cycle's conversation into a
+ * folder over the internal app. */
+function registerFolderRoutes(app: Express, deps: ServerDeps): void {
+  app.get("/folders", async (_req, res) => {
+    res.status(200).json({ folders: await deps.folders.list() });
+  });
+
+  app.post("/folders", async (req, res) => {
+    const { name } = req.body as { name?: unknown };
+    if (typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const { folder, created } = await deps.folders.ensure(name.trim());
+    res.status(created ? 201 : 200).json({ status: created ? "created" : "exists", folder });
+  });
+
+  app.patch("/folders/:id", async (req, res) => {
+    const { name } = req.body as { name?: unknown };
+    if (typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const folder = await deps.folders.rename(req.params.id, name.trim());
+    if (!folder) {
+      res.status(404).json({ error: "folder not found" });
+      return;
+    }
+    res.status(200).json({ status: "updated", folder });
+  });
+
+  app.delete("/folders/:id", async (req, res) => {
+    // Deleting a folder never deletes conversations — they move back to
+    // the top level. Done before the folder goes, so an interrupted
+    // delete leaves a folder with fewer members rather than conversations
+    // pointing at nothing.
+    const members = (await deps.conversations.list()).filter(
+      (c) => c.folderId === req.params.id,
+    );
+    for (const member of members) {
+      await deps.conversations.update(member.id, { folderId: null });
+    }
+    if (!(await deps.folders.delete(req.params.id))) {
+      res.status(404).json({ error: "folder not found" });
+      return;
+    }
+    res.status(200).json({ status: "deleted", movedOut: members.length });
+  });
+}
+
 function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
   app.patch("/conversations/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
@@ -514,6 +569,17 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
     if (body.status === "active" || body.status === "paused") updates.status = body.status;
     if (typeof body.memory === "string") updates.memory = body.memory;
     if (typeof body.stickyFallback === "boolean") updates.stickyFallback = body.stickyFallback;
+    // Move between folders. `null` is the top level; an unknown id is
+    // refused rather than stored, so a typo cannot hide a conversation.
+    if (body.folderId === null) {
+      updates.folderId = null;
+    } else if (typeof body.folderId === "string") {
+      if (!(await deps.folders.get(body.folderId))) {
+        res.status(400).json({ error: "unknown folder" });
+        return;
+      }
+      updates.folderId = body.folderId;
+    }
     if (Array.isArray(body.tags) && body.tags.every((t) => typeof t === "string")) {
       updates.tags = body.tags as string[];
     }
@@ -736,6 +802,7 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   registerCreateConversationRoute(app, deps);
   registerUpdateConversationRoute(app, deps);
+  registerFolderRoutes(app, deps);
   registerCreatePersonaRoute(app, deps);
   registerCreateHeartbeatRoute(app, deps);
   registerCreateWorkflowRoute(app, deps);
@@ -1280,6 +1347,7 @@ export function createInternalApp(deps: ServerDeps): Express {
 
   registerCreateConversationRoute(app, deps);
   registerUpdateConversationRoute(app, deps);
+  registerFolderRoutes(app, deps);
   // Runner tools (create_persona/create_heartbeat/create_workflow, gated by
   // the manageAgora persona capability) call these over the internal app —
   // ADR 0007: agent-facing writes live here, not on the public app.
