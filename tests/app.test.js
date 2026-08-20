@@ -1154,3 +1154,96 @@ describe("heartbeat Run now reports the truth", () => {
     }
   });
 });
+
+// Folders in the switcher (ideas.md #5). Driven through loadConversationList()
+// rather than by poking `allFolders`, because that is a top-level `const` in a
+// classic script: indirect eval keeps it lexical, so the only way in is the
+// same fetch the real page makes.
+describe("conversation folders in the drawer", () => {
+  const conv = (id, over = {}) => ({
+    id,
+    rootId: id,
+    name: `conv ${id}`,
+    archived: false,
+    status: "active",
+    lastMessageAt: "2026-08-20T06:00:00.000Z",
+    createdAt: "2026-08-20T05:00:00.000Z",
+    ...over,
+  });
+  const folder = (id, name) => ({ id, name, createdAt: "2026-08-20T05:00:00.000Z" });
+
+  const servesJson = (body) =>
+    globalThis.fetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => body });
+
+  /** loadConversationList fetches /folders first, then /conversations. */
+  const load = async (folders, conversations) => {
+    servesJson({ folders });
+    servesJson({ conversations });
+    await globalThis.loadConversationList();
+  };
+
+  const list = () => document.getElementById("drawer-list");
+  const headers = () => [...list().querySelectorAll(".drawer-folder")];
+  const rows = () => [...list().querySelectorAll(".drawer-row")];
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("draws a header per folder with its member count, and indents the members", async () => {
+    await load([folder("f1", "Nova")], [conv("a", { folderId: "f1" }), conv("b")]);
+    expect(headers().map((h) => h.querySelector(".drawer-folder-name").textContent)).toEqual(["Nova"]);
+    expect(headers()[0].querySelector(".drawer-folder-count").textContent).toBe("1");
+    const filed = rows().find((r) => r.textContent.includes("conv a"));
+    const unfiled = rows().find((r) => r.textContent.includes("conv b"));
+    expect(filed.classList.contains("in-folder")).toBe(true);
+    expect(unfiled.classList.contains("in-folder")).toBe(false);
+  });
+
+  it("collapsing a folder hides its conversations and survives a re-render", async () => {
+    await load([folder("f1", "Nova")], [conv("a", { folderId: "f1" }), conv("b")]);
+    expect(rows()).toHaveLength(2);
+
+    headers()[0].dispatchEvent(new window.Event("click", { bubbles: true }));
+    expect(rows().map((r) => r.textContent.trim())).toEqual([expect.stringContaining("conv b")]);
+    expect(headers()[0].querySelector(".drawer-folder-twisty").textContent).toBe("▸");
+    // The count still says how many are in there — a collapsed folder that
+    // showed 0 would read as empty rather than closed.
+    expect(headers()[0].querySelector(".drawer-folder-count").textContent).toBe("1");
+
+    globalThis.renderDrawerList();
+    expect(rows()).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("agora-collapsed-folders"))).toEqual(["f1"]);
+
+    headers()[0].dispatchEvent(new window.Event("click", { bubbles: true }));
+    expect(rows()).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem("agora-collapsed-folders"))).toEqual([]);
+  });
+
+  it("shows a conversation whose folder is gone rather than losing it", async () => {
+    await load([], [conv("a", { folderId: "deleted-folder" })]);
+    expect(headers()).toHaveLength(0);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain("conv a");
+    expect(rows()[0].classList.contains("in-folder")).toBe(false);
+  });
+
+  it("keeps forks under their root inside a folder", async () => {
+    await load(
+      [folder("f1", "Nova")],
+      [conv("a", { folderId: "f1" }), conv("a2", { rootId: "a", folderId: "f1" })],
+    );
+    const inFolder = rows();
+    expect(inFolder).toHaveLength(2);
+    expect(inFolder[0].textContent).toContain("conv a");
+    expect(inFolder[1].classList.contains("forked")).toBe(true);
+    expect(inFolder[1].classList.contains("in-folder")).toBe(true);
+  });
+
+  it("the poll signature notices a move between folders", () => {
+    const sig = globalThis.conversationListSignature;
+    expect(sig([conv("a")])).not.toBe(sig([conv("a", { folderId: "f1" })]));
+    expect(sig([conv("a", { folderId: "f1" })])).not.toBe(sig([conv("a", { folderId: "f2" })]));
+    expect(sig([conv("a", { folderId: "f1" })])).toBe(sig([conv("a", { folderId: "f1" })]));
+  });
+});

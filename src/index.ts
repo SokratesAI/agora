@@ -13,6 +13,7 @@ import { HeartbeatStore } from "./chat/heartbeat-store.js";
 import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
+import { FolderStore } from "./chat/folder-store.js";
 import { runStartupMigration } from "./migrate.js";
 import { createPublicApp, createInternalApp, type InvokePayload, type ServerDeps } from "./server.js";
 
@@ -26,6 +27,7 @@ const heartbeats = new HeartbeatStore(config.dataDir);
 const workflows = new WorkflowStore(config.dataDir);
 const audit = new AuditStore(config.dataDir);
 const attachments = new AttachmentStore(config.dataDir);
+const folders = new FolderStore(config.dataDir);
 
 if (config.vapidPublicKey && config.vapidPrivateKey) {
   webpush.setVapidDetails(config.vapidSubject, config.vapidPublicKey, config.vapidPrivateKey);
@@ -69,6 +71,7 @@ const deps: ServerDeps = {
   workflows,
   audit,
   attachments,
+  folders,
   webPush: webpush,
   logger,
   invokeRunner,

@@ -18,6 +18,7 @@ import { HeartbeatStore } from "./chat/heartbeat-store.js";
 import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
+import { FolderStore } from "./chat/folder-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -62,6 +63,7 @@ async function makeDeps(configOverrides: Partial<Config> = {}): Promise<
     workflows: new WorkflowStore(dir),
     audit: new AuditStore(dir),
     attachments: new AttachmentStore(dir),
+    folders: new FolderStore(dir),
     webPush,
     logger: pino({ enabled: false }),
     invokeRunner: invokeMock,
@@ -1728,5 +1730,128 @@ describe("public app response compression", () => {
     const gzipped = await rawGet(app, "/app.js", "gzip");
     expect(gzipped.status).toBe(200);
     expect(gzipped.encoding).toBe("gzip");
+  });
+});
+
+describe("conversation folders", () => {
+  let deps: Awaited<ReturnType<typeof makeDeps>>;
+  let app: Express;
+
+  beforeEach(async () => {
+    deps = await makeDeps();
+    app = createPublicApp(deps);
+  });
+
+  async function makeConversation(name: string): Promise<string> {
+    const res = await request(app).post("/conversations").send({ name });
+    return (res.body.conversation as { id: string }).id;
+  }
+
+  it("POST /folders creates once and returns the same folder by name after that", async () => {
+    const first = await request(app).post("/folders").send({ name: "Nova" });
+    expect(first.status).toBe(201);
+    expect(first.body.status).toBe("created");
+    const again = await request(app).post("/folders").send({ name: "Nova" });
+    expect(again.status).toBe(200);
+    expect(again.body.status).toBe("exists");
+    expect(again.body.folder.id).toBe(first.body.folder.id);
+    const listed = await request(app).get("/folders");
+    expect(listed.body.folders).toHaveLength(1);
+  });
+
+  it("POST /folders rejects a blank name", async () => {
+    expect((await request(app).post("/folders").send({})).status).toBe(400);
+    expect((await request(app).post("/folders").send({ name: "   " })).status).toBe(400);
+  });
+
+  it("PATCH /conversations/:id moves into a folder and back to the top level", async () => {
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const id = await makeConversation("Cycle 1");
+
+    const moved = await request(app).patch(`/conversations/${id}`).send({ folderId });
+    expect(moved.status).toBe(200);
+    expect(moved.body.conversation.folderId).toBe(folderId);
+    expect((await deps.conversations.get(id))?.folderId).toBe(folderId);
+
+    const home = await request(app).patch(`/conversations/${id}`).send({ folderId: null });
+    expect(home.status).toBe(200);
+    expect(home.body.conversation.folderId).toBeUndefined();
+    expect((await deps.conversations.get(id))?.folderId).toBeUndefined();
+  });
+
+  it("PATCH /conversations/:id refuses an unknown folder rather than storing it", async () => {
+    const id = await makeConversation("Cycle 1");
+    const res = await request(app).patch(`/conversations/${id}`).send({ folderId: "nope" });
+    expect(res.status).toBe(400);
+    expect((await deps.conversations.get(id))?.folderId).toBeUndefined();
+  });
+
+  it("an omitted folderId leaves the conversation where it is", async () => {
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const id = await makeConversation("Cycle 1");
+    await request(app).patch(`/conversations/${id}`).send({ folderId });
+    await request(app).patch(`/conversations/${id}`).send({ name: "Cycle 1 renamed" });
+    expect((await deps.conversations.get(id))?.folderId).toBe(folderId);
+  });
+
+  it("DELETE /folders/:id moves its conversations back to the top level, never deletes them", async () => {
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const kept = await makeConversation("Cycle 1");
+    const other = await makeConversation("Elsewhere");
+    await request(app).patch(`/conversations/${kept}`).send({ folderId });
+
+    const res = await request(app).delete(`/folders/${folderId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.movedOut).toBe(1);
+    expect((await request(app).get("/folders")).body.folders).toHaveLength(0);
+    expect(await deps.conversations.get(kept)).not.toBeNull();
+    expect((await deps.conversations.get(kept))?.folderId).toBeUndefined();
+    expect(await deps.conversations.get(other)).not.toBeNull();
+  });
+
+  it("PATCH and DELETE /folders/:id 404 on an unknown id", async () => {
+    expect((await request(app).patch("/folders/nope").send({ name: "x" })).status).toBe(404);
+    expect((await request(app).delete("/folders/nope")).status).toBe(404);
+  });
+
+  it("GET /conversations reports folderId so the drawer can group without a second join", async () => {
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const id = await makeConversation("Cycle 1");
+    await request(app).patch(`/conversations/${id}`).send({ folderId });
+    const listed = await request(app).get("/conversations");
+    const row = (listed.body.conversations as { id: string; folderId?: string }[]).find((c) => c.id === id);
+    expect(row?.folderId).toBe(folderId);
+  });
+
+  it("the internal app carries the same folder routes, so the runner can file its own cycle", async () => {
+    const internal = createInternalApp(deps);
+    const created = await request(internal).post("/folders").send({ name: "Nova" });
+    expect(created.status).toBe(201);
+    expect((await request(internal).get("/folders")).body.folders).toHaveLength(1);
+  });
+});
+
+describe("forking a conversation in a folder", () => {
+  it("keeps the fork in its root's folder", async () => {
+    const deps = await makeDeps();
+    const app = createPublicApp(deps);
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const created = await request(app).post("/conversations").send({ name: "Cycle 1" });
+    const id = (created.body.conversation as { id: string }).id;
+    await request(app).patch(`/conversations/${id}`).send({ folderId });
+    await deps.conversations.appendMessage(id, "Edvard", "hello");
+
+    const forked = await deps.conversations.fork(id);
+    expect(forked?.folderId).toBe(folderId);
+    expect((await deps.conversations.get(forked!.id))?.folderId).toBe(folderId);
+  });
+
+  it("leaves a fork of an unfiled conversation unfiled", async () => {
+    const deps = await makeDeps();
+    const app = createPublicApp(deps);
+    const created = await request(app).post("/conversations").send({ name: "Cycle 1" });
+    const id = (created.body.conversation as { id: string }).id;
+    const forked = await deps.conversations.fork(id);
+    expect(forked?.folderId).toBeUndefined();
   });
 });
