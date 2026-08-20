@@ -1281,12 +1281,17 @@ describe("describeWait", () => {
     const messages = document.getElementById("messages");
     messages.innerHTML = "";
     vi.setSystemTime(new Date(ms(T0) + 60000));
-    globalThis.updateWaitingNotice([mine(T0)]);
-    expect(messages.querySelector(".wait-notice")).not.toBeNull();
-    expect(messages.querySelectorAll("select")).toHaveLength(0);
-    expect(messages.querySelectorAll("button")).toHaveLength(0);
-    expect(messages.querySelector(".retry-banner")).toBeNull();
-    vi.useRealTimers();
+    try {
+      globalThis.updateWaitingNotice([mine(T0)]);
+      expect(messages.querySelector(".wait-notice")).not.toBeNull();
+      expect(messages.querySelectorAll("select")).toHaveLength(0);
+      expect(messages.querySelectorAll("button")).toHaveLength(0);
+      expect(messages.querySelector(".retry-banner")).toBeNull();
+    } finally {
+      // try/finally to match this file's own established pattern -- a throwing
+      // assertion otherwise leaks the fake clock into later tests.
+      vi.useRealTimers();
+    }
   });
 
   it("reports the elapsed wait in human units", () => {
@@ -1332,6 +1337,27 @@ describe("describeWait", () => {
     expect(wait.lines.join(" ")).toContain("Last error: ReadTimeout.");
   });
 
+  it("does not say 'no error' directly underneath a quoted error", () => {
+    // Reviewer finding on PR #64. Each branch was tested alone and the pair
+    // was never rendered together, so the notice quoted a real error and then
+    // denied one existed three lines later. This is the likeliest real path:
+    // the ⚠️ notice invites "any message you send", so his next message lands
+    // with that failure immediately behind it.
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:30.000Z", { text: "⚠️ 3 consecutive failed reply attempts. Last error: ReadTimeout.", system: true }),
+      mine(T0),
+    ];
+    const joined = globalThis.describeWait(thread, ms(T0) + 600000).lines.join(" ");
+    expect(joined).toContain("Last error: ReadTimeout.");
+    expect(joined).not.toContain("no error");
+  });
+
+  it("still says 'no error' when there genuinely was not one", () => {
+    const joined = globalThis.describeWait([mine(T0)], ms(T0) + 600000).lines.join(" ");
+    expect(joined).toContain("no error");
+  });
+
   it("does not blame a stale failure that a good reply has since superseded", () => {
     const thread = [
       mine("2026-08-20T08:00:00.000Z"),
@@ -1356,7 +1382,7 @@ describe("describeWait", () => {
     expect(wait.lines.join(" ")).toContain("Nothing has ever replied in this conversation");
   });
 
-  it("counts a thinking chunk or a tool chip as a sign of life", () => {
+  it("counts a thinking chunk as a sign of life", () => {
     const thread = [
       mine("2026-08-20T09:00:00.000Z"),
       at("2026-08-20T09:00:10.000Z", { text: "hmm", thinking: true }),
@@ -1364,6 +1390,18 @@ describe("describeWait", () => {
     ];
     const wait = globalThis.describeWait(thread, ms(T0) + 600000);
     expect(wait.lines.join(" ")).toContain("10s");
+  });
+
+  it("counts a tool chip as a sign of life", () => {
+    // Split out of the test above, which named both and exercised only the
+    // thinking half (reviewer finding on PR #64).
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:20.000Z", { text: "", activity: { capability: "vault", detail: "get" } }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("20s");
   });
 
   it("always admits it cannot tell a slow model from a dead runner", () => {

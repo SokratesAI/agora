@@ -3050,8 +3050,9 @@ function describeWait(messages, nowMs) {
   // has already been superseded by whatever replied after it, and blaming a
   // healthy thread for an old failure is the same guessing this replaced.
   const previous = visible[visible.length - 2];
-  if (previous?.system) {
-    lines.push(`The previous turn reported: ${previous.text}`);
+  const failedBefore = previous?.system === true;
+  if (failedBefore) {
+    lines.push(`The previous attempt reported: ${previous.text}`);
   }
 
   const slowest = slowestPriorReply(visible);
@@ -3063,7 +3064,14 @@ function describeWait(messages, nowMs) {
     lines.push(`That is longer than any previous reply here, the slowest of which took ${formatWaited(slowest)}.`);
   }
 
-  lines.push("Nothing has come back yet: no answer, no thinking, no tool activity and no error. From here that looks the same whether the model is slow or the runner is down.");
+  // The closing line has to agree with the error line above it. Saying "and no
+  // error" directly underneath a quoted error is the single most confusing
+  // thing this notice could do, and it is the exact path Edvard is most likely
+  // to walk: the ⚠️ notice invites him to "send any message", so his next
+  // message lands with that failure sitting immediately behind it.
+  lines.push(failedBefore
+    ? "Nothing has come back since: no answer, no thinking and no tool activity. The error above is from the attempt before this message, so this one may simply not have been picked up yet."
+    : "Nothing has come back yet: no answer, no thinking, no tool activity and no error. From here that looks the same whether the model is slow or the runner is down.");
   return { kind: "stalled", lines };
 }
 
