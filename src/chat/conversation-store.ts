@@ -340,6 +340,11 @@ export class ConversationStore {
       archived: false,
       stickyFallback: source.stickyFallback,
       rootId: source.rootId,
+      // A fork stays in its root's folder. Missed on the first pass, and the
+      // drawer made it worse rather than obvious: it buckets by folder before
+      // grouping by lineage, so a fork that fell out of the folder also lost
+      // its "↳" and read as an unrelated conversation.
+      ...(source.folderId ? { folderId: source.folderId } : {}),
       forkedFrom: {
         conversationId: source.id,
         messageId: atMessageId ?? source.messages[source.messages.length - 1]?.id ?? "",

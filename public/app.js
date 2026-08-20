@@ -423,12 +423,11 @@ async function refreshConversationList() {
   if (!ok) return false;
   const next = data.conversations || [];
   if (conversationListSignature(next) === conversationListSignature(allConversations)) return false;
-  // A conversation the runner just filed can name a folder this page has
-  // never seen — refresh the folder list before drawing it, or the row
-  // renders at the top level and looks like the move failed.
-  if (next.some((c) => c.folderId && !allFolders.some((f) => f.id === c.folderId))) {
-    await loadFolders();
-  }
+  // The conversation list moved, so re-read the folders before drawing it:
+  // a folder created, renamed or deleted from another tab is invisible to
+  // this list's own signature, and a stale name or an orphaned header would
+  // otherwise sit there until the page was reloaded.
+  await loadFolders();
   allConversations = next;
   renderDrawerList();
   return true;

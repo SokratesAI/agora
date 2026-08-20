@@ -1830,3 +1830,28 @@ describe("conversation folders", () => {
     expect((await request(internal).get("/folders")).body.folders).toHaveLength(1);
   });
 });
+
+describe("forking a conversation in a folder", () => {
+  it("keeps the fork in its root's folder", async () => {
+    const deps = await makeDeps();
+    const app = createPublicApp(deps);
+    const folderId = (await request(app).post("/folders").send({ name: "Nova" })).body.folder.id;
+    const created = await request(app).post("/conversations").send({ name: "Cycle 1" });
+    const id = (created.body.conversation as { id: string }).id;
+    await request(app).patch(`/conversations/${id}`).send({ folderId });
+    await deps.conversations.appendMessage(id, "Edvard", "hello");
+
+    const forked = await deps.conversations.fork(id);
+    expect(forked?.folderId).toBe(folderId);
+    expect((await deps.conversations.get(forked!.id))?.folderId).toBe(folderId);
+  });
+
+  it("leaves a fork of an unfiled conversation unfiled", async () => {
+    const deps = await makeDeps();
+    const app = createPublicApp(deps);
+    const created = await request(app).post("/conversations").send({ name: "Cycle 1" });
+    const id = (created.body.conversation as { id: string }).id;
+    const forked = await deps.conversations.fork(id);
+    expect(forked?.folderId).toBeUndefined();
+  });
+});
