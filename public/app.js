@@ -12,9 +12,11 @@ const POLL_INTERVAL_MS = 3000;
 // The sidebar changes far more slowly than an open conversation's messages,
 // and re-rendering it is a full innerHTML rebuild, so it gets its own timer.
 const LIST_POLL_INTERVAL_MS = 15000;
-// Timeout heuristic for the "no reply yet — retry" banner; the async
-// runner publishes no error signal, so this is inference, not detection.
-const RETRY_OFFER_MS = 45000;
+// How long a message sits unanswered before the thread stops saying
+// "Waiting for a reply…" and starts explaining what it does and does not
+// know. This is the only inference left in the waiting notice — see
+// `describeWait` for why the rest of it is now observation.
+const WAIT_NOTICE_MS = 45000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -2388,7 +2390,7 @@ function renderMessages(
     .map((m) => `${m.id}:${m.text.length}:${m.forgotten ? 1 : 0}`)
     .join(",")}:${editingMessageId}:${currentDetail?.status}`;
   if (key === renderedKey) {
-    updateRetryBanner(messages);
+    updateWaitingNotice(messages);
     return;
   }
   renderedKey = key;
@@ -2416,7 +2418,7 @@ function renderMessages(
       );
     });
   }
-  updateRetryBanner(messages);
+  updateWaitingNotice(messages);
   if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -2959,48 +2961,137 @@ msgSheetDelete.addEventListener("click", async () => {
   fetchMessages();
 });
 
-// --- Waiting/retry banner -----------------------------------------------------
+// --- Waiting notice -----------------------------------------------------------
+// Replaced the "No reply yet" + model-picker + Retry banner on 2026-08-20.
+// Edvard, capture: *"Remove the agora 'no reply yet?' And then gives you an
+// option to choose a different model when a message takes a long time to
+// respond. I would rather have actual good feedback on why the agents has not
+// responded (yet) or if something went wrong."*
+//
+// Two things were wrong with the old banner, and the second is the one that
+// mattered. It inferred a fault from 45 seconds of silence, and then offered a
+// *model swap* as the remedy for a cause it had never established. The remedy
+// was also destructive: Retry DELETEd his message and re-POSTed it, so a turn
+// that was merely slow lost the original and restarted on a different model.
+//
+// What replaces it is measured off this conversation's own history rather than
+// guessed. Note where the guessing actually was: the runner posts `system`
+// (the ⚠️ backoff notice, carrying the real exception text), `activity` (tool
+// use) and `thinking` messages, and every one of those is a real message that
+// lands at the end of the thread -- so it suppresses this notice by simply not
+// being Edvard's message. This code therefore only ever runs in the one case
+// where *nothing at all* has come back, and the honest thing to say about that
+// case is what it does and does not know. It cannot tell a slow model from a
+// dead runner, and it now says so instead of blaming the model.
+//
+// `slowestPriorReply` is what turns "waited 3m" into information: a Nova cycle
+// thread's own past turns took tens of minutes, so 3m there is normal and 3m
+// in a quick chat is not. Same number, opposite meaning, and only this
+// conversation's history can tell them apart.
+
+/** `ms` as a short human duration -- "45s", "3m 20s", "1h 4m". */
+function formatWaited(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) {
+    const seconds = total % 60;
+    return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** How long the slowest previous turn in this thread took to produce its
+ * first sign of life, in ms, or `null` if nothing has ever answered here.
+ *
+ * "First sign of life" is deliberately the same event that hides this notice
+ * -- any non-system message from someone other than Edvard, including a
+ * thinking chunk or a tool chip. Measuring the wait against a *final* answer
+ * would compare two different quantities and overstate what is normal. */
+function slowestPriorReply(messages) {
+  let slowest = null;
+  let askedAt = null;
+  for (const message of messages) {
+    if (message.forgotten) continue;
+    if (message.sender === MY_SENDER) {
+      askedAt = new Date(message.ts).getTime();
+      continue;
+    }
+    // A ⚠️ control-plane notice is not the conversation answering, and
+    // counting it would make a failing thread look fast.
+    if (askedAt === null || message.system) continue;
+    const took = new Date(message.ts).getTime() - askedAt;
+    askedAt = null;
+    if (Number.isFinite(took) && took >= 0 && (slowest === null || took > slowest)) slowest = took;
+  }
+  return slowest;
+}
+
+/** `{ kind, lines }` describing why nothing has replied, or `null` when the
+ * thread is not waiting on anything. Pure, so the copy is testable without
+ * touching the DOM. */
+function describeWait(messages, nowMs) {
+  const visible = messages.filter((m) => !m.forgotten);
+  const last = visible[visible.length - 1];
+  if (!last || last.sender !== MY_SENDER) return null;
+
+  const waitedMs = nowMs - new Date(last.ts).getTime();
+  if (!Number.isFinite(waitedMs)) return null;
+  if (waitedMs < WAIT_NOTICE_MS) return { kind: "waiting", lines: ["Waiting for a reply…"] };
+
+  const lines = [`No reply yet — waited ${formatWaited(waitedMs)}.`];
+
+  // The turn before this one failed and said why. Edvard's new message has
+  // already cleared the runner's backoff (conversations.py pops it when the
+  // last message id changes), so this is context for the silence rather than
+  // the current state -- and it is worth having, because a thread that just
+  // failed three times is the one case where continued silence is a bad sign.
+  const priorSystem = visible.slice(0, -1).reverse().find((m) => m.system);
+  const previous = visible[visible.length - 2];
+  if (priorSystem && previous && priorSystem.id === previous.id) {
+    lines.push(`The previous turn reported: ${priorSystem.text}`);
+  }
+
+  const slowest = slowestPriorReply(visible);
+  if (slowest === null) {
+    lines.push("Nothing has ever replied in this conversation, so there is no normal wait to compare against.");
+  } else if (waitedMs <= slowest) {
+    lines.push(`That is still within normal for this conversation — the slowest previous reply here took ${formatWaited(slowest)}.`);
+  } else {
+    lines.push(`That is longer than any previous reply here, the slowest of which took ${formatWaited(slowest)}.`);
+  }
+
+  lines.push("Nothing has come back yet: no answer, no thinking, no tool activity and no error. From here that looks the same whether the model is slow or the runner is down.");
+  return { kind: "stalled", lines };
+}
+
 let trailingStatusEl = null;
-function updateRetryBanner(messages) {
+function updateWaitingNotice(messages) {
   if (trailingStatusEl) {
     trailingStatusEl.remove();
     trailingStatusEl = null;
   }
+  // A paused conversation has its own persistent banner (#paused-banner), so
+  // saying it twice would just be noise.
   if (!messages.length || currentDetail?.status === "paused") return;
-  const last = messages[messages.length - 1];
-  if (last.sender !== MY_SENDER || last.forgotten) return;
 
-  const waitedMs = Date.now() - new Date(last.ts).getTime();
-  if (waitedMs < RETRY_OFFER_MS) {
-    const indicator = document.createElement("div");
-    indicator.className = "typing-indicator";
-    indicator.textContent = "Waiting for a reply…";
-    messagesEl.appendChild(indicator);
-    trailingStatusEl = indicator;
-    return;
+  const wait = describeWait(messages, Date.now());
+  if (!wait) return;
+
+  const el = document.createElement("div");
+  if (wait.kind === "waiting") {
+    el.className = "typing-indicator";
+    el.textContent = wait.lines[0];
+  } else {
+    el.className = "wait-notice";
+    for (const line of wait.lines) {
+      const p = document.createElement("p");
+      p.textContent = line;
+      el.appendChild(p);
+    }
   }
-  const banner = document.createElement("div");
-  banner.className = "retry-banner";
-  banner.textContent = "No reply yet. ";
-  const select = document.createElement("select");
-  for (const model of latestModels) {
-    const option = document.createElement("option");
-    option.value = model.id;
-    option.textContent = model.label;
-    select.appendChild(option);
-  }
-  const retry = document.createElement("button");
-  retry.type = "button";
-  retry.textContent = "Retry";
-  retry.addEventListener("click", async () => {
-    await api("DELETE", messageEndpoint(last.id));
-    await api("POST", replyEndpoint(), { text: last.text, model: select.value || undefined });
-    renderedKey = "";
-    fetchMessages();
-  });
-  banner.append(select, retry);
-  messagesEl.appendChild(banner);
-  trailingStatusEl = banner;
+  messagesEl.appendChild(el);
+  trailingStatusEl = el;
 }
 
 // --- @mention autocomplete ----------------------------------------------------

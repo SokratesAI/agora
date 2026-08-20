@@ -1247,3 +1247,136 @@ describe("conversation folders in the drawer", () => {
     expect(sig([conv("a", { folderId: "f1" })])).toBe(sig([conv("a", { folderId: "f1" })]));
   });
 });
+
+// The waiting notice that replaced the "No reply yet" model-picker banner
+// (Edvard's capture, 2026-08-20). The point of these tests is that the copy is
+// derived from the thread rather than guessed, so they assert on *which* fact
+// comes back, not just that some banner appeared.
+describe("describeWait", () => {
+  const at = (iso, extra = {}) => ({ id: `w${++idSeq}`, sender: "Nova", text: "", ts: iso, ...extra });
+  const mine = (iso, extra = {}) => at(iso, { sender: "Edvard", text: "hi", ...extra });
+  const T0 = "2026-08-20T10:00:00.000Z";
+  const ms = (iso) => new Date(iso).getTime();
+
+  it("says nothing when the last message is not Edvard's", () => {
+    expect(globalThis.describeWait([mine(T0), at("2026-08-20T10:00:01.000Z")], ms(T0) + 600000)).toBeNull();
+  });
+
+  it("says nothing when Edvard's last message is forgotten", () => {
+    expect(globalThis.describeWait([mine(T0, { forgotten: true })], ms(T0) + 600000)).toBeNull();
+  });
+
+  it("is a plain typing indicator before the notice threshold", () => {
+    const wait = globalThis.describeWait([mine(T0)], ms(T0) + 44000);
+    expect(wait.kind).toBe("waiting");
+    expect(wait.lines).toEqual(["Waiting for a reply…"]);
+  });
+
+  it("renders no model picker and no retry button — the whole point of the capture", () => {
+    // The old banner put a <select> of every model and a Retry that DELETEd
+    // Edvard's message and re-sent it. Asserting on the rendered DOM rather
+    // than on the copy is what actually pins that: the text still contains
+    // the word "model" ("whether the model is slow"), so a string match here
+    // would pass while the control was still on screen.
+    const messages = document.getElementById("messages");
+    messages.innerHTML = "";
+    vi.setSystemTime(new Date(ms(T0) + 60000));
+    globalThis.updateWaitingNotice([mine(T0)]);
+    expect(messages.querySelector(".wait-notice")).not.toBeNull();
+    expect(messages.querySelectorAll("select")).toHaveLength(0);
+    expect(messages.querySelectorAll("button")).toHaveLength(0);
+    expect(messages.querySelector(".retry-banner")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("reports the elapsed wait in human units", () => {
+    const wait = globalThis.describeWait([mine(T0)], ms(T0) + 200000);
+    expect(wait.lines[0]).toBe("No reply yet — waited 3m 20s.");
+  });
+
+  it("calls a long wait normal when this thread has been slower before", () => {
+    // A previous turn here took 20 minutes, so 10 is unremarkable.
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:20:00.000Z", { text: "slow answer" }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("still within normal for this conversation");
+    expect(wait.lines.join(" ")).toContain("20m");
+  });
+
+  it("calls the same wait unusual when this thread has always been fast", () => {
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:05.000Z", { text: "quick answer" }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("longer than any previous reply here");
+    expect(wait.lines.join(" ")).toContain("5s");
+  });
+
+  it("says so when nothing has ever replied in the conversation", () => {
+    const wait = globalThis.describeWait([mine(T0)], ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("Nothing has ever replied in this conversation");
+  });
+
+  it("surfaces the real error text when the previous turn failed", () => {
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:30.000Z", { text: "⚠️ 3 consecutive failed reply attempts. Last error: ReadTimeout.", system: true }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("Last error: ReadTimeout.");
+  });
+
+  it("does not blame a stale failure that a good reply has since superseded", () => {
+    const thread = [
+      mine("2026-08-20T08:00:00.000Z"),
+      at("2026-08-20T08:00:30.000Z", { text: "⚠️ old failure", system: true }),
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:05.000Z", { text: "fine now" }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).not.toContain("old failure");
+  });
+
+  it("does not count a ⚠️ notice as the conversation having answered", () => {
+    // Without the `system` guard this thread would report a 30-second
+    // "normal", making a failing conversation look fast.
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:30.000Z", { text: "⚠️ failed", system: true }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("Nothing has ever replied in this conversation");
+  });
+
+  it("counts a thinking chunk or a tool chip as a sign of life", () => {
+    const thread = [
+      mine("2026-08-20T09:00:00.000Z"),
+      at("2026-08-20T09:00:10.000Z", { text: "hmm", thinking: true }),
+      mine(T0),
+    ];
+    const wait = globalThis.describeWait(thread, ms(T0) + 600000);
+    expect(wait.lines.join(" ")).toContain("10s");
+  });
+
+  it("always admits it cannot tell a slow model from a dead runner", () => {
+    const wait = globalThis.describeWait([mine(T0)], ms(T0) + 600000);
+    expect(wait.lines[wait.lines.length - 1]).toContain("slow or the runner is down");
+  });
+});
+
+describe("formatWaited", () => {
+  it("renders seconds, minutes and hours", () => {
+    expect(globalThis.formatWaited(45000)).toBe("45s");
+    expect(globalThis.formatWaited(200000)).toBe("3m 20s");
+    expect(globalThis.formatWaited(180000)).toBe("3m");
+    expect(globalThis.formatWaited(3840000)).toBe("1h 4m");
+  });
+});
