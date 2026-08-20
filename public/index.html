@@ -524,14 +524,14 @@
       padding: 0.55rem 0.9rem; resize: none;
     }
     .typing-indicator { color: var(--text-dim); font-size: 0.8rem; padding: 0 0.2rem; }
-    .retry-banner {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    .wait-notice {
       background: var(--bg-raised); border: 1px solid var(--border);
       border-radius: 0.7rem; padding: 0.5rem 0.7rem;
       font-size: 0.8rem; color: var(--text-dim);
     }
-    .retry-banner select { font: inherit; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 0.4rem; }
-    .retry-banner button { font: inherit; background: var(--accent); color: #fff; border: none; border-radius: 0.4rem; padding: 0.25rem 0.6rem; cursor: pointer; }
+    .wait-notice p { margin: 0; }
+    .wait-notice p + p { margin-top: 0.35rem; }
+    .wait-notice p:first-child { color: var(--text); }
     #empty { color: var(--text-dimmer); text-align: center; margin-top: 2rem; font-size: 0.9rem; }
 
     /* --- Paused banner + composer -------------------------------------- */
