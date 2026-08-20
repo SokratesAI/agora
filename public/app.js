@@ -3046,10 +3046,12 @@ function describeWait(messages, nowMs) {
   // last message id changes), so this is context for the silence rather than
   // the current state -- and it is worth having, because a thread that just
   // failed three times is the one case where continued silence is a bad sign.
-  const priorSystem = visible.slice(0, -1).reverse().find((m) => m.system);
+  // Deliberately only the *immediately* preceding message. A ⚠️ further back
+  // has already been superseded by whatever replied after it, and blaming a
+  // healthy thread for an old failure is the same guessing this replaced.
   const previous = visible[visible.length - 2];
-  if (priorSystem && previous && priorSystem.id === previous.id) {
-    lines.push(`The previous turn reported: ${priorSystem.text}`);
+  if (previous?.system) {
+    lines.push(`The previous turn reported: ${previous.text}`);
   }
 
   const slowest = slowestPriorReply(visible);
