@@ -541,7 +541,16 @@ export class ConversationStore {
     try {
       const raw = await fs.readFile(filePath, "utf8");
       const conversation = JSON.parse(raw) as Conversation;
-      conversation.model ??= DEFAULT_MODEL;
+      // Empty, not DEFAULT_MODEL. A record written before `model` existed
+      // has no model of its own, and since #65 that is a meaningful state:
+      // the joined view resolves `conversation.model || persona.model`, so
+      // an empty string is what lets a legacy conversation fall back to its
+      // curator persona. Backfilling a concrete default here instead pinned
+      // every one of them to hardcoded haiku before the fallback could ever
+      // see them — and did it silently, because the field looked populated.
+      // Every conversation created since the create route started copying
+      // the persona's model has a real value here and is untouched by this.
+      conversation.model ??= "";
       conversation.thinking ??= DEFAULT_THINKING;
       conversation.archived ??= DEFAULT_ARCHIVED;
       conversation.status ??= "active";
