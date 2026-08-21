@@ -43,7 +43,7 @@ describe("ConversationStore", () => {
     expect(conversation.thinking).toBe(true);
   });
 
-  it("backfills model/thinking defaults when reading a pre-existing file that lacks them", async () => {
+  it("leaves a pre-existing file's missing model empty so it can fall back to its curator, and backfills thinking", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);
     const conversation = await store.create("Haiku", "persona a");
@@ -53,7 +53,14 @@ describe("ConversationStore", () => {
     await fs.writeFile(filePath, JSON.stringify(withoutNewFields));
 
     const reloaded = await store.get(conversation.id);
-    expect(reloaded?.model).toBe(DEFAULT_MODEL);
+    // Empty, not DEFAULT_MODEL. Since #65 the joined view resolves
+    // `conversation.model || persona.model`, so backfilling a concrete
+    // default here pinned every legacy conversation to hardcoded haiku
+    // before the fallback could see it — silently, because the field then
+    // looked populated. Empty is the honest representation of "this record
+    // has no model of its own", and it is what reaches the curator.
+    expect(reloaded?.model).toBe("");
+    expect(reloaded?.model).not.toBe(DEFAULT_MODEL);
     expect(reloaded?.thinking).toBe(DEFAULT_THINKING);
   });
 
