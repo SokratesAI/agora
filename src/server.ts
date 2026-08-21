@@ -169,7 +169,14 @@ async function enrichConversation(
     });
     if (link.role === "curator") {
       personality = persona.personality;
-      model = persona.model;
+      // The model belongs to the conversation, not the curator persona
+      // (idea #95, slice 1). One persona can be the curator of many
+      // conversations — Nova's is, one per cycle — so letting the persona
+      // decide the model made every one of them change at once. The
+      // persona's model is now only the seed for a conversation that has
+      // none of its own, which is every conversation created before the
+      // create route started copying it.
+      model = conversation.model || persona.model;
       thinking = persona.thinking;
     }
   }
@@ -592,7 +599,13 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
       updates.personas = links;
     }
 
-    // Legacy personality/model/thinking edits route through to the curator
+    // The model is the conversation's own (idea #95, slice 1) — it stays
+    // here rather than being written through to the curator, so picking a
+    // model in one conversation no longer repoints every other
+    // conversation that shares the same persona.
+    if (typeof body.model === "string") updates.model = body.model;
+
+    // Legacy personality/thinking edits still route through to the curator
     // persona once one exists — editing a conversation's settings edits
     // what's actually displayed/used (joined fields), not a dead cache.
     const curator = (updates.personas ?? conversation.personas)?.find(
@@ -600,7 +613,6 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
     );
     const personaEdits: Record<string, unknown> = {};
     if (typeof body.personality === "string") personaEdits.personality = body.personality;
-    if (typeof body.model === "string") personaEdits.model = body.model;
     if (typeof body.thinking === "boolean") personaEdits.thinking = body.thinking;
     if (Object.keys(personaEdits).length > 0) {
       if (curator) {

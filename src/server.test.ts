@@ -368,8 +368,55 @@ describe("agora public app", () => {
 
     const list = await request(app).get("/conversations");
     const entry = list.body.conversations.find((c: { id: string }) => c.id === created.body.conversation.id);
-    expect(entry.model).toBe("gemini:gemini-flash-latest");
     expect(entry.personality).toBe("new");
+    // ...but not the model. That one is the conversation's own as of idea
+    // #95 slice 1, so editing the persona in Studio no longer repoints
+    // conversations that were already created from it.
+    expect(entry.model).toBe("anthropic:claude-haiku-4-5-20251001");
+  });
+
+  it("a conversation with no model of its own still falls back to the curator's", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Legacy", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    const id = created.body.conversation.id;
+    const personaId = created.body.conversation.personas[0].personaId;
+
+    // Every conversation stored before the create route copied the model
+    // looks like this. The fallback is what keeps them working.
+    await deps.conversations.update(id, { model: "" });
+    await deps.personas.update(personaId, { model: "gemini:gemini-flash-latest" });
+
+    const list = await request(app).get("/conversations");
+    const entry = list.body.conversations.find((c: { id: string }) => c.id === id);
+    expect(entry.model).toBe("gemini:gemini-flash-latest");
+  });
+
+  it("picking a model in one conversation leaves the others sharing that persona alone", async () => {
+    // The bug this slice exists for: Nova's persona is the curator of one
+    // conversation per cycle, so a model chosen in any one of them used to
+    // be a model chosen in all of them.
+    const first = await request(app)
+      .post("/conversations")
+      .send({ name: "Shared A", personality: "p", model: "anthropic:claude-sonnet-5" });
+    const personaId = first.body.conversation.personas[0].personaId;
+    const second = await request(app)
+      .post("/conversations")
+      .send({ name: "Shared B", personaId });
+    expect(second.body.conversation.personas[0].personaId).toBe(personaId);
+    expect(second.body.conversation.model).toBe("anthropic:claude-sonnet-5");
+
+    await request(app)
+      .patch(`/conversations/${first.body.conversation.id}`)
+      .send({ model: "gemini:gemini-flash-latest" });
+
+    const list = await request(app).get("/conversations");
+    const other = list.body.conversations.find(
+      (c: { id: string }) => c.id === second.body.conversation.id,
+    );
+    expect(other.model).toBe("anthropic:claude-sonnet-5");
+    const persona = await deps.personas.get(personaId);
+    expect(persona?.model).toBe("anthropic:claude-sonnet-5");
   });
 
   it("POST /conversations with personaId reuses an existing persona", async () => {
@@ -583,7 +630,7 @@ describe("agora public app", () => {
     });
   });
 
-  it("PATCH /conversations/:id routes personality/model edits to the curator persona", async () => {
+  it("PATCH /conversations/:id routes personality to the curator persona and keeps the model on the conversation", async () => {
     const created = await request(app)
       .post("/conversations")
       .send({ name: "Edit", personality: "before", model: "anthropic:claude-sonnet-5" });
@@ -600,7 +647,9 @@ describe("agora public app", () => {
 
     const persona = await deps.personas.get(personaId);
     expect(persona?.personality).toBe("after");
-    expect(persona?.model).toBe("gemini:gemini-flash-latest");
+    // The model edit stopped here (idea #95, slice 1) — the persona keeps
+    // whatever it had.
+    expect(persona?.model).toBe("anthropic:claude-sonnet-5");
   });
 
   it("PATCH /conversations/:id updates stickyFallback, defaults false, and returns it on GET", async () => {
