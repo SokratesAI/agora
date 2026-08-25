@@ -1555,6 +1555,52 @@ describe("agora internal app", () => {
     expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
   });
 
+  // -------------------------------------------------------------------------
+  // 2026-08-25: presence. Nova's chat dock renders an Agora conversation from
+  // a different origin, so the service worker's "don't notify while the app is
+  // open" check cannot see it and the phone buzzed for a reply already on
+  // screen. A watching client says so; the buzz is withheld, the reply is not.
+  // -------------------------------------------------------------------------
+
+  it("POST /conversations/:id/presence withholds the next push but still records the message", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Watched", "");
+    const presence = await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+    expect(presence.status).toBe(200);
+    expect(presence.body.status).toBe("watching");
+
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "he is looking right at this", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBe(true);
+    expect(res.body.message.text).toBe("he is looking right at this");
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+
+    // And the message really is in the conversation, not merely echoed back.
+    const stored = await deps.conversations.get(conversation.id);
+    expect(stored?.messages.map((m) => m.text)).toContain("he is looking right at this");
+  });
+
+  it("presence on one conversation does not silence another", async () => {
+    await deps.store.save(validSubscription);
+    const watched = await deps.conversations.create("WatchedOne", "");
+    const other = await deps.conversations.create("OtherOne", "");
+    await request(app).post(`/conversations/${watched.id}/presence`).send({});
+
+    const res = await request(app)
+      .post(`/conversations/${other.id}/notify`)
+      .send({ text: "nobody is looking at this one", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBeUndefined();
+    expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST /conversations/:id/presence 404s on a conversation that does not exist", async () => {
+    const res = await request(app).post("/conversations/nope/presence").send({});
+    expect(res.status).toBe(404);
+  });
+
   it("POST /conversations/:id/notify defaults push to true when omitted", async () => {
     await deps.store.save(validSubscription);
     const conversation = await deps.conversations.create("StreamFinal", "");
