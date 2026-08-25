@@ -6,6 +6,7 @@ import type pino from "pino";
 import type { Config } from "./config.js";
 import type { SubscriptionStore, PushSubscriptionRecord } from "./push/subscription-store.js";
 import { isQuiet } from "./push/quiet-hours.js";
+import { createWatchers, WATCHING_TTL_MS } from "./push/watching.js";
 import type { MessageStore } from "./chat/message-store.js";
 import type {
   Conversation,
@@ -1333,6 +1334,9 @@ export function createInternalApp(deps: ServerDeps): Express {
   const app = express();
   app.use(express.json());
 
+  // Which conversations are on somebody's screen right now — see push/watching.ts.
+  const watchers = createWatchers();
+
   const tokenGuard: RequestHandler = (req, res, next) => {
     if (!config.agentToken) {
       next();
@@ -1478,6 +1482,24 @@ export function createInternalApp(deps: ServerDeps): Express {
     res.status(201).json({ status: "recorded", entry });
   });
 
+  /**
+   * "I have this conversation on screen." Any client that renders a
+   * conversation it did not open in Agora itself — today that is Nova's chat
+   * dock and its Ask page — pings this while it is visible, and `notify`
+   * below withholds the phone push for as long as it stays fresh.
+   */
+  app.post("/conversations/:id/presence", async (req, res) => {
+    // Validated rather than marked blind: a wrong id would otherwise silently
+    // never suppress anything, and the caller would have no way to find out.
+    const conversation = await conversations.get(req.params.id);
+    if (!conversation) {
+      res.status(404).json({ error: "conversation not found" });
+      return;
+    }
+    watchers.mark(conversation.id, Date.now());
+    res.status(200).json({ status: "watching", ttlMs: WATCHING_TTL_MS });
+  });
+
   app.post("/conversations/:id/notify", async (req, res) => {
     const { text, sender, system, push, thinking } = req.body as {
       text?: unknown; sender?: unknown; system?: unknown; push?: unknown; thinking?: unknown;
@@ -1508,6 +1530,27 @@ export function createInternalApp(deps: ServerDeps): Express {
     // (heartbeats' one-shot notify, auto_pause, legacy /notify) is unchanged.
     if (push === false) {
       res.status(200).json({ status: "recorded", message });
+      return;
+    }
+
+    // He is looking at this conversation in another app right now, so the
+    // reply is already on his screen and a buzz is noise — the same rule the
+    // service worker applies to a visible Agora tab, extended to the clients
+    // it cannot enumerate. The message is appended either way.
+    //
+    // `system` is excluded and it is the whole reason this is not a one-line
+    // check. A system notice is machinery talking — `back_off`'s "N failed
+    // reply attempts, retrying in X min", `stall_notice`'s "the loop has
+    // stopped writing" — and Nova's thread filters those out of what it
+    // renders. So a watching client is exactly the client that will *not*
+    // show him this one, and withholding the push would leave him watching a
+    // "Thinking…" that has already failed, with nothing anywhere to say so.
+    if (system !== true && watchers.isWatched(conversation.id, Date.now())) {
+      logger.info(
+        { conversationId: conversation.id, sender: speaker },
+        "conversation is on screen elsewhere — push withheld",
+      );
+      res.status(200).json({ status: "recorded", watching: true, message });
       return;
     }
 

@@ -11,6 +11,7 @@ import {
 } from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
 import { MessageStore } from "./chat/message-store.js";
+import { WATCHING_TTL_MS } from "./push/watching.js";
 import { MODEL_CATALOG } from "./models.js";
 import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
@@ -1553,6 +1554,87 @@ describe("agora internal app", () => {
     expect(res.body.status).toBe("recorded");
     expect(res.body.message.text).toBe("first chunk");
     expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // 2026-08-25: presence. Nova's chat dock renders an Agora conversation from
+  // a different origin, so the service worker's "don't notify while the app is
+  // open" check cannot see it and the phone buzzed for a reply already on
+  // screen. A watching client says so; the buzz is withheld, the reply is not.
+  // -------------------------------------------------------------------------
+
+  it("POST /conversations/:id/presence withholds the next push but still records the message", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Watched", "");
+    const presence = await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+    expect(presence.status).toBe(200);
+    expect(presence.body.status).toBe("watching");
+
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "he is looking right at this", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBe(true);
+    expect(res.body.message.text).toBe("he is looking right at this");
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+
+    // And the message really is in the conversation, not merely echoed back.
+    const stored = await deps.conversations.get(conversation.id);
+    expect(stored?.messages.map((m) => m.text)).toContain("he is looking right at this");
+  });
+
+  it("presence on one conversation does not silence another", async () => {
+    await deps.store.save(validSubscription);
+    const watched = await deps.conversations.create("WatchedOne", "");
+    const other = await deps.conversations.create("OtherOne", "");
+    await request(app).post(`/conversations/${watched.id}/presence`).send({});
+
+    const res = await request(app)
+      .post(`/conversations/${other.id}/notify`)
+      .send({ text: "nobody is looking at this one", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBeUndefined();
+    expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("presence never withholds a system notice, because Nova filters those out of the thread", async () => {
+    // `back_off` and `stall_notice` push these. Nova's ask thread drops
+    // `system` messages, so a watching client is precisely the one that will
+    // not show him "your question failed" — the push is all he has.
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("WatchedSystem", "");
+    await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "⚠️ 3 consecutive failed reply attempts", sender: "Agora", system: true });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBeUndefined();
+    expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stale ping stops withholding, which is the half that can lose a notification", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("StoppedWatching", "");
+    await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(Date.now() + WATCHING_TTL_MS + 1));
+      const res = await request(app)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "he closed the tab a while ago", sender: "Nova" });
+      expect(res.status).toBe(200);
+      expect(res.body.watching).toBeUndefined();
+      expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("POST /conversations/:id/presence 404s on a conversation that does not exist", async () => {
+    const res = await request(app).post("/conversations/nope/presence").send({});
+    expect(res.status).toBe(404);
   });
 
   it("POST /conversations/:id/notify defaults push to true when omitted", async () => {
