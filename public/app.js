@@ -1885,7 +1885,7 @@ function renderWorkflowStudio() {
   if (!allWorkflows.length) {
     const empty = document.createElement("div");
     empty.className = "studio-empty";
-    empty.textContent = "No workflows yet. A workflow is a bounded, multi-step, multi-persona turn sequence a heartbeat can run instead of a single curator turn.";
+    empty.textContent = "No workflows yet. A workflow is a bounded, multi-step turn sequence a heartbeat can run instead of a single turn.";
     workflowStudioList.appendChild(empty);
     return;
   }
