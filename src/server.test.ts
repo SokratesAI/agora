@@ -677,21 +677,32 @@ describe("agora public app", () => {
     const id = created.body.conversation.id;
     const curatorId = created.body.conversation.personas[0].personaId;
     const second = await deps.personas.create({
-      name: "Listener",
+      name: "Second",
       model: "anthropic:claude-sonnet-5",
     });
 
-    // two curators → 400
+    // two personas → 400, whatever their roles (idea #95)
+    for (const role of ["curator", "listener"]) {
+      expect(
+        (
+          await request(app)
+            .patch(`/conversations/${id}`)
+            .send({
+              personas: [
+                { personaId: curatorId, role: "curator" },
+                { personaId: second.id, role },
+              ],
+            })
+        ).status,
+      ).toBe(400);
+    }
+
+    // the only surviving role is curator → a lone listener is 400 too
     expect(
       (
         await request(app)
           .patch(`/conversations/${id}`)
-          .send({
-            personas: [
-              { personaId: curatorId, role: "curator" },
-              { personaId: second.id, role: "curator" },
-            ],
-          })
+          .send({ personas: [{ personaId: second.id, role: "listener" }] })
       ).status,
     ).toBe(400);
 
@@ -704,20 +715,16 @@ describe("agora public app", () => {
       ).status,
     ).toBe(400);
 
-    // valid curator + listener → 200, joined response carries both
+    // one curator → 200, and it can be swapped for a different persona
     const ok = await request(app)
       .patch(`/conversations/${id}`)
-      .send({
-        personas: [
-          { personaId: curatorId, role: "curator" },
-          { personaId: second.id, role: "listener" },
-        ],
-      });
+      .send({ personas: [{ personaId: second.id, role: "curator" }] });
     expect(ok.status).toBe(200);
-    expect(ok.body.conversation.personas).toHaveLength(2);
+    expect(ok.body.conversation.personas).toHaveLength(1);
+    expect(ok.body.conversation.personas[0].personaId).toBe(second.id);
   });
 
-  it("POST /conversations/:id/fork forks at a message with added listeners", async () => {
+  it("POST /conversations/:id/fork forks at a message and ignores addPersonaIds", async () => {
     const created = await request(app)
       .post("/conversations")
       .send({ name: "Root", model: "anthropic:claude-sonnet-5" });
@@ -734,7 +741,9 @@ describe("agora public app", () => {
       .send({ atMessageId: first.body.message.id, addPersonaIds: [extra.id] });
     expect(res.status).toBe(201);
     expect(res.body.conversation.rootId).toBe(id);
-    expect(res.body.conversation.personas).toHaveLength(2);
+    // an old client still sending addPersonaIds gets a single-persona fork
+    expect(res.body.conversation.personas).toHaveLength(1);
+    expect(res.body.conversation.personas[0].personaId).not.toBe(extra.id);
 
     const forked = await deps.conversations.get(res.body.conversation.id);
     expect(forked?.messages.map((m) => m.text)).toEqual(["one"]);

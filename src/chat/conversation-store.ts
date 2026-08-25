@@ -71,11 +71,18 @@ export interface Message {
   thinking?: boolean;
 }
 
-/** Exactly one "curator" per conversation; listeners reply only when
- * @mentioned. Turn engine: Architecture §3. */
+/** Exactly one persona per conversation, always the "curator".
+ *
+ * There used to be a second role, "listener", which replied only when
+ * @mentioned. Nobody ever created one: measured 2026-08-25 across all 404
+ * conversations, every one had exactly one persona and the role histogram
+ * was `{curator: 404, listener: 0}`. Edvard asked for the multi-persona
+ * machinery to go (idea #95), so it is gone. The `role` field itself stays
+ * — the runner reads it to find who answers — but "curator" is now its only
+ * legal value. */
 export interface PersonaLink {
   personaId: string;
-  role: "curator" | "listener";
+  role: "curator";
 }
 
 export interface Conversation {
@@ -299,14 +306,12 @@ export class ConversationStore {
   }
 
   /** Fork (Decisions/0004): a full persisted copy of persona links +
-   * messages up to (and including) `atMessageId`, same lineage `rootId`,
-   * with optional extra personas injected as listeners in the same call
-   * (the @mention flow's `addPersonas` fix from 0004's amendment). */
-  async fork(
-    id: string,
-    atMessageId?: string,
-    addPersonaIds?: string[],
-  ): Promise<Conversation | null> {
+   * messages up to (and including) `atMessageId`, same lineage `rootId`.
+   *
+   * It used to take an `addPersonaIds` list that joined extra personas as
+   * listeners (0004's amendment, for the @mention flow). That went with the
+   * rest of multi-persona — see `PersonaLink`. */
+  async fork(id: string, atMessageId?: string): Promise<Conversation | null> {
     const source = await this.get(id);
     if (!source) return null;
     let messages = source.messages;
@@ -316,11 +321,6 @@ export class ConversationStore {
       messages = source.messages.slice(0, index + 1);
     }
     const personas: PersonaLink[] = (source.personas ?? []).map((p) => ({ ...p }));
-    for (const personaId of addPersonaIds ?? []) {
-      if (!personas.some((p) => p.personaId === personaId)) {
-        personas.push({ personaId, role: "listener" });
-      }
-    }
     // Name uniqueness is only cosmetic, but "X (fork)" colliding on a
     // second fork of the same thread would be confusing in the drawer.
     let name = `${source.name} (fork)`;

@@ -350,7 +350,6 @@
       padding: 0.4rem 0.6rem; font-size: 0.85rem;
     }
     .participant-row .p-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    .participant-row .p-role { font-size: 0.68rem; color: var(--text-dim); }
     .participant-row button {
       background: none; border: 1px solid var(--border); color: var(--text-dim);
       border-radius: 0.5rem; padding: 0.15rem 0.45rem; font-size: 0.7rem; cursor: pointer;
@@ -768,10 +767,9 @@
       <h3>Participants</h3>
       <div id="edit-participants" style="display:flex;flex-direction:column;gap:0.3rem;"></div>
       <div class="modal-row">
-        <select id="edit-add-persona"></select>
-        <button type="button" class="inline-button btn-secondary" id="edit-add-persona-btn">Add</button>
+        <select id="edit-persona-pick"></select>
       </div>
-      <p class="modal-hint">One curator replies by default; listeners answer when @mentioned. Swapping the curator is a handoff.</p>
+      <p class="modal-hint">One persona per conversation — it is the one that replies here. Pick a different one to hand the thread over.</p>
       <p class="modal-status" id="edit-status"></p>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" id="edit-cancel">Cancel</button>
@@ -929,7 +927,7 @@
       <select id="heartbeat-form-workflow">
         <option value="">None — a single curator turn (default)</option>
       </select>
-      <p class="modal-hint">When set, the turn runs the workflow's steps against the conversation's own personas instead of the single persona above (Decisions/0009).</p>
+      <p class="modal-hint">When set, the turn runs the workflow's steps against the conversation's own persona instead of the one above (Decisions/0009). A conversation holds exactly one persona, so a workflow is a sequence of steps rather than a hand-off between several.</p>
       <h3>Schedule</h3>
       <div class="modal-row">
         <select id="heartbeat-form-schedule-type">
@@ -996,7 +994,7 @@
       <input id="workflow-form-name" type="text" placeholder="Name (e.g. Discuss)" required />
       <textarea id="workflow-form-description" placeholder="What this workflow is for..." rows="2"></textarea>
       <h3>Steps</h3>
-      <p class="modal-hint">Each step runs `loopCount` rounds of round-robin turn-taking across the conversation's own personas. Turn order continues across steps, never resets.</p>
+      <p class="modal-hint">Each step runs `loopCount` rounds against the conversation's own persona — there is exactly one, so the round-robin this was written for no longer has anyone to rotate between.</p>
       <div id="workflow-form-steps"></div>
       <button type="button" class="inline-button btn-secondary" id="workflow-form-add-step">＋ Add step</button>
       <p class="modal-status" id="workflow-form-status"></p>

@@ -252,21 +252,23 @@ async function validatePersonaLinks(
   if (!Array.isArray(links) || links.length === 0) {
     return { error: "personas must be a non-empty array" };
   }
+  // One persona per conversation — the multi-persona/listener machinery was
+  // removed (idea #95) after measuring that nothing had ever used it.
+  if (links.length > 1) {
+    return { error: "a conversation has exactly one persona" };
+  }
   const parsed: PersonaLink[] = [];
-  let curators = 0;
   for (const raw of links) {
     const link = raw as Record<string, unknown>;
     if (typeof link.personaId !== "string") return { error: "personaId is required" };
-    if (link.role !== "curator" && link.role !== "listener") {
-      return { error: "role must be curator or listener" };
+    if (link.role !== "curator") {
+      return { error: "role must be curator" };
     }
     if (!(await personas.get(link.personaId))) {
       return { error: `unknown persona ${link.personaId}` };
     }
-    if (link.role === "curator") curators++;
-    parsed.push({ personaId: link.personaId, role: link.role });
+    parsed.push({ personaId: link.personaId, role: "curator" });
   }
-  if (curators !== 1) return { error: "exactly one curator is required" };
   return parsed;
 }
 
@@ -1269,23 +1271,10 @@ export function createPublicApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/fork", async (req, res) => {
-    const { atMessageId, addPersonaIds } = req.body as {
-      atMessageId?: unknown;
-      addPersonaIds?: unknown;
-    };
-    const extraIds = Array.isArray(addPersonaIds)
-      ? (addPersonaIds as unknown[]).filter((p): p is string => typeof p === "string")
-      : [];
-    for (const personaId of extraIds) {
-      if (!(await personas.get(personaId))) {
-        res.status(400).json({ error: `unknown persona ${personaId}` });
-        return;
-      }
-    }
+    const { atMessageId } = req.body as { atMessageId?: unknown };
     const forked = await conversations.fork(
       req.params.id,
       typeof atMessageId === "string" ? atMessageId : undefined,
-      extraIds,
     );
     if (!forked) {
       res.status(404).json({ error: "conversation or message not found" });
