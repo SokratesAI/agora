@@ -326,7 +326,7 @@ describe("ConversationStore", () => {
     expect(reloaded?.personas).toBeUndefined();
   });
 
-  it("forks a conversation at a message, keeping lineage and adding listeners", async () => {
+  it("forks a conversation at a message, keeping lineage and the one persona", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
     const store = new ConversationStore(dir);
     const source = await store.create("Marcus", "trainer", undefined, undefined, [
@@ -335,15 +335,12 @@ describe("ConversationStore", () => {
     const first = await store.appendMessage(source.id, "Edvard", "one");
     await store.appendMessage(source.id, "Marcus", "two");
 
-    const forked = await store.fork(source.id, first!.id, ["p2"]);
+    const forked = await store.fork(source.id, first!.id);
     expect(forked?.name).toBe("Marcus (fork)");
     expect(forked?.rootId).toBe(source.id);
     expect(forked?.forkedFrom).toEqual({ conversationId: source.id, messageId: first!.id });
     expect(forked?.messages.map((m) => m.text)).toEqual(["one"]);
-    expect(forked?.personas).toEqual([
-      { personaId: "p1", role: "curator" },
-      { personaId: "p2", role: "listener" },
-    ]);
+    expect(forked?.personas).toEqual([{ personaId: "p1", role: "curator" }]);
     expect(forked?.memory).toBe(source.memory);
 
     // second fork gets a numbered name, same lineage

@@ -79,8 +79,7 @@ const editStickyFallbackRow = $("edit-sticky-fallback-row");
 const editStickyFallback = $("edit-sticky-fallback");
 const editMemory = $("edit-memory");
 const editParticipants = $("edit-participants");
-const editAddPersona = $("edit-add-persona");
-const editAddPersonaBtn = $("edit-add-persona-btn");
+const editPersonaPick = $("edit-persona-pick");
 const editStatus = $("edit-status");
 const editCancel = $("edit-cancel");
 const editOpenPersonaEditorBtn = $("edit-open-persona-editor");
@@ -975,6 +974,9 @@ askModal.addEventListener("submit", async (event) => {
 });
 
 // --- Edit conversation modal ---------------------------------------------------
+// One persona per conversation (idea #95). The multi-persona editor that used
+// to live here — add a listener, promote it to curator, remove it — is gone;
+// the picker below replaces the single persona instead of adding a second.
 function renderEditParticipants() {
   editParticipants.innerHTML = "";
   for (const link of editLinks) {
@@ -983,47 +985,26 @@ function renderEditParticipants() {
     const name = document.createElement("span");
     name.className = "p-name";
     name.textContent = link.name;
-    const role = document.createElement("span");
-    role.className = "p-role";
-    role.textContent = link.role;
-    row.append(name, role);
-    if (link.role !== "curator") {
-      const promote = document.createElement("button");
-      promote.type = "button";
-      promote.textContent = "Make curator";
-      promote.title = "Handoff — this persona becomes the default responder";
-      promote.addEventListener("click", () => {
-        for (const l of editLinks) l.role = l === link ? "curator" : "listener";
-        renderEditParticipants();
-      });
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => {
-        editLinks = editLinks.filter((l) => l !== link);
-        renderEditParticipants();
-      });
-      row.append(promote, remove);
-    }
+    row.append(name);
     editParticipants.appendChild(row);
   }
-  editAddPersona.innerHTML = "";
-  const inUse = new Set(editLinks.map((l) => l.personaId));
+  editPersonaPick.innerHTML = "";
+  const current = editLinks[0];
   for (const persona of allPersonas) {
-    if (persona.isTemplate || inUse.has(persona.id)) continue;
+    if (persona.isTemplate) continue;
     const option = document.createElement("option");
     option.value = persona.id;
     option.textContent = persona.name;
-    editAddPersona.appendChild(option);
+    if (current && persona.id === current.personaId) option.selected = true;
+    editPersonaPick.appendChild(option);
   }
-  editAddPersonaBtn.disabled = !editAddPersona.children.length;
+  editPersonaPick.disabled = !editPersonaPick.children.length;
 }
 
-editAddPersonaBtn.addEventListener("click", () => {
-  const personaId = editAddPersona.value;
-  const persona = allPersonas.find((p) => p.id === personaId);
+editPersonaPick.addEventListener("change", () => {
+  const persona = allPersonas.find((p) => p.id === editPersonaPick.value);
   if (!persona) return;
-  editLinks.push({ personaId, role: editLinks.length ? "listener" : "curator", name: persona.name });
+  editLinks = [{ personaId: persona.id, role: "curator", name: persona.name }];
   renderEditParticipants();
 });
 
@@ -2318,13 +2299,9 @@ function updateHeader() {
     return;
   }
   headerTitle.childNodes[0].textContent = currentDetail.name;
-  const personas = currentDetail.personas || [];
-  if (personas.length > 1) {
-    headerSubtitle.textContent = personas
-      .map((p) => (p.role === "curator" ? `${p.name}★` : p.name))
-      .join(" · ");
-    headerSubtitle.hidden = false;
-  } else {
+  {
+    // Was: a "name★ · name" participant strip whenever a conversation had
+    // more than one persona. It can no longer have one (idea #95).
     const model = modelCatalogById.get(currentDetail.model);
     headerSubtitle.textContent = model ? model.label : "";
     headerSubtitle.hidden = !model;
