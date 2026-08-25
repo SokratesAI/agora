@@ -13,9 +13,12 @@
  * new message arrives. This is not a huge problem, but its not high quality of
  * a product."*
  *
- * A different origin cannot be enumerated, so the reader says so instead: any
- * client showing a conversation POSTs `/conversations/:id/presence` while it
- * is on screen, and `notify` withholds the push while that is fresh. The
+ * A different origin cannot be enumerated, so the reader says so instead: a
+ * client with a conversation actually on screen POSTs
+ * `/conversations/:id/presence`, and `notify` withholds the push while that is
+ * fresh. "On screen" is the client's job to get right, and it is narrower than
+ * "the page is loaded" — a shut chat panel on a tab nobody is looking at must
+ * not vouch for him. The
  * message is appended either way — this withholds the buzz, never the reply,
  * exactly like quiet hours next door.
  *
@@ -23,8 +26,16 @@
  * survives a restart is a lie about where he is looking.
  */
 
-/** How long one ping vouches for. */
-export const WATCHING_TTL_MS = 30_000;
+/** How long one ping vouches for.
+ *
+ * Tied to the caller's poll cadence rather than picked round: Nova pings on
+ * every ask-poll tick, which is 4s, so this is two and a half ticks. It has to
+ * outlast a missed tick and no more — there is no way to *revoke* presence, so
+ * whatever this is, it is also the window in which a phone he just locked keeps
+ * vouching for him and a push he wanted is silently dropped. 30s bought
+ * nothing over 10s and made that window three times longer.
+ */
+export const WATCHING_TTL_MS = 10_000;
 
 export interface Watchers {
   /** Record that some client has this conversation on screen right now. */
@@ -40,8 +51,11 @@ export function createWatchers(ttlMs: number = WATCHING_TTL_MS): Watchers {
 
   return {
     mark(conversationId, now) {
-      // Prune on write rather than on a timer: a client that stops pinging
-      // stops paying for its entry, and nothing here needs a background task.
+      // Prune on write rather than on a timer: nothing here needs a background
+      // task. Note this only runs when *some* client writes, so if every
+      // client stops at once the last entries sit until the next ping — they
+      // are stale to `isWatched` from the TTL onwards either way, so this
+      // bounds the map against churn, not against idleness.
       for (const [id, at] of seen) {
         if (now - at >= ttlMs) seen.delete(id);
       }

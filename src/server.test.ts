@@ -11,6 +11,7 @@ import {
 } from "./server.js";
 import { SubscriptionStore, type PushSubscriptionRecord } from "./push/subscription-store.js";
 import { MessageStore } from "./chat/message-store.js";
+import { WATCHING_TTL_MS } from "./push/watching.js";
 import { MODEL_CATALOG } from "./models.js";
 import { ConversationStore } from "./chat/conversation-store.js";
 import { PersonaStore } from "./chat/persona-store.js";
@@ -1594,6 +1595,41 @@ describe("agora internal app", () => {
     expect(res.status).toBe(200);
     expect(res.body.watching).toBeUndefined();
     expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("presence never withholds a system notice, because Nova filters those out of the thread", async () => {
+    // `back_off` and `stall_notice` push these. Nova's ask thread drops
+    // `system` messages, so a watching client is precisely the one that will
+    // not show him "your question failed" — the push is all he has.
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("WatchedSystem", "");
+    await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "⚠️ 3 consecutive failed reply attempts", sender: "Agora", system: true });
+    expect(res.status).toBe(200);
+    expect(res.body.watching).toBeUndefined();
+    expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stale ping stops withholding, which is the half that can lose a notification", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("StoppedWatching", "");
+    await request(app).post(`/conversations/${conversation.id}/presence`).send({});
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(Date.now() + WATCHING_TTL_MS + 1));
+      const res = await request(app)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "he closed the tab a while ago", sender: "Nova" });
+      expect(res.status).toBe(200);
+      expect(res.body.watching).toBeUndefined();
+      expect(deps.webPush.sendNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("POST /conversations/:id/presence 404s on a conversation that does not exist", async () => {
