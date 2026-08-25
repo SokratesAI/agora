@@ -1028,7 +1028,12 @@ sheetEdit.addEventListener("click", async () => {
   editThinking.checked = Boolean(data.thinking);
   editStickyFallback.checked = Boolean(data.stickyFallback);
   editMemory.value = data.memory || "";
-  editLinks = (data.personas || []).map((p) => ({ ...p }));
+  // `.slice(0, 1)` is the grandfather clause. No conversation has more than
+  // one persona (measured across all 404 of them), but if one ever did, the
+  // modal would load both links and the submit below would send both — and
+  // the server now refuses that, so renaming the conversation or editing its
+  // memory would fail with an error about participants the user never touched.
+  editLinks = (data.personas || []).slice(0, 1).map((p) => ({ ...p }));
   renderEditParticipants();
   updateThinkingVisibility(editModel, editThinkingRow, editThinking, editBadge);
   updateStickyFallbackVisibility(editModel, editStickyFallbackRow, editStickyFallback);
