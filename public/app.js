@@ -990,8 +990,15 @@ function renderEditParticipants() {
   }
   editPersonaPick.innerHTML = "";
   const current = editLinks[0];
-  for (const persona of allPersonas) {
-    if (persona.isTemplate) continue;
+  const offered = allPersonas.filter((p) => !p.isTemplate);
+  // The picker is now the only thing on screen naming the persona, so a
+  // current persona missing from the catalogue (a template, or one deleted
+  // under us) must still appear — otherwise the box would sit there
+  // displaying a persona this conversation does not have.
+  if (current && !offered.some((p) => p.id === current.personaId)) {
+    offered.unshift({ id: current.personaId, name: current.name || "(current persona)" });
+  }
+  for (const persona of offered) {
     const option = document.createElement("option");
     option.value = persona.id;
     option.textContent = persona.name;
