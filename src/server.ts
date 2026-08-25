@@ -1537,7 +1537,15 @@ export function createInternalApp(deps: ServerDeps): Express {
     // reply is already on his screen and a buzz is noise — the same rule the
     // service worker applies to a visible Agora tab, extended to the clients
     // it cannot enumerate. The message is appended either way.
-    if (watchers.isWatched(conversation.id, Date.now())) {
+    //
+    // `system` is excluded and it is the whole reason this is not a one-line
+    // check. A system notice is machinery talking — `back_off`'s "N failed
+    // reply attempts, retrying in X min", `stall_notice`'s "the loop has
+    // stopped writing" — and Nova's thread filters those out of what it
+    // renders. So a watching client is exactly the client that will *not*
+    // show him this one, and withholding the push would leave him watching a
+    // "Thinking…" that has already failed, with nothing anywhere to say so.
+    if (system !== true && watchers.isWatched(conversation.id, Date.now())) {
       logger.info(
         { conversationId: conversation.id, sender: speaker },
         "conversation is on screen elsewhere — push withheld",
