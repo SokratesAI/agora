@@ -1452,16 +1452,32 @@ describe("agora internal app", () => {
       forceRun: true,
       conversationId: conv.id,
     };
-    expect(Object.keys(sent).sort()).toEqual([...INTERNAL_HEARTBEAT_FIELDS].sort());
+    expect(Object.keys(sent).sort()).toEqual(Object.keys(INTERNAL_HEARTBEAT_FIELDS).sort());
     const heartbeat = await deps.heartbeats.create({
       name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
     });
     const res = await request(app).patch(`/heartbeats/${heartbeat.id}`).send(sent);
     expect(res.status).toBe(200);
     const reloaded = await deps.heartbeats.get(heartbeat.id) as unknown as Record<string, unknown>;
-    for (const field of INTERNAL_HEARTBEAT_FIELDS) {
+    for (const field of Object.keys(INTERNAL_HEARTBEAT_FIELDS)) {
       expect(reloaded[field]).toEqual(sent[field]);
     }
+  });
+
+  it("PATCH /heartbeats/:id (internal) refuses a supported field carrying the wrong type", async () => {
+    // The same lie one step in: the name is on the list, the value is not
+    // usable, and the old handler answered 200 having changed nothing.
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    await deps.heartbeats.update(heartbeat.id, { forceRun: true });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ forceRun: "yes" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("forceRun must be a boolean");
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.forceRun).toBe(true);
   });
 
   it("POST /audit records entries", async () => {

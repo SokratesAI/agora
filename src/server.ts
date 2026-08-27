@@ -1328,17 +1328,19 @@ export function createPublicApp(deps: ServerDeps): Express {
  * The only fields the internal `PATCH /heartbeats/:id` applies. It is the
  * runner engine's own bookkeeping surface and carries no capability gate, so
  * it stays this narrow on purpose (ADR 0007); everything else about a
- * heartbeat is configuration and lives on the public route. Exported so a
- * test can assert every name here really is applied -- a name that drifts out
- * of the handler below would otherwise start being silently accepted again,
- * which is the exact failure this list exists to end.
+ * heartbeat is configuration and lives on the public route. It carries each
+ * field's type because the handler applies the body straight off this table:
+ * a per-field `if (typeof ...)` ladder beside it is a second copy that can
+ * drift, and a field that drifts out of the ladder goes back to being
+ * accepted-and-ignored, which is the exact failure this table exists to end.
+ * Exported so a test can assert every name here really is applied.
  */
-export const INTERNAL_HEARTBEAT_FIELDS = [
-  "lastRunAt",
-  "lastResult",
-  "forceRun",
-  "conversationId",
-];
+export const INTERNAL_HEARTBEAT_FIELDS: Record<string, "string" | "boolean"> = {
+  lastRunAt: "string",
+  lastResult: "string",
+  forceRun: "boolean",
+  conversationId: "string",
+};
 
 /**
  * Internal app (:8081): the agent surface. Guarded by the shared
@@ -1440,14 +1442,31 @@ export function createInternalApp(deps: ServerDeps): Express {
     // So refuse a field this route does not apply, and name the route that
     // does; a 200 that means "I ignored you" is the expensive answer.
     const unsupported = Object.keys(body).filter(
-      (key) => !INTERNAL_HEARTBEAT_FIELDS.includes(key),
+      (key) => !(key in INTERNAL_HEARTBEAT_FIELDS),
     );
     if (unsupported.length > 0) {
       res.status(400).json({
         error:
-          `this route only updates ${INTERNAL_HEARTBEAT_FIELDS.join(", ")}; ` +
+          `this route only updates ${Object.keys(INTERNAL_HEARTBEAT_FIELDS).join(", ")}; ` +
           `${unsupported.join(", ")} is heartbeat configuration -- ` +
           `PATCH /heartbeats/:id on the public app updates it`,
+      });
+      return;
+    }
+    // A supported name carrying the wrong type is the same lie one step in:
+    // `{"forceRun": "yes"}` clears the check above, fails the type the store
+    // needs, and would leave with a 200 having changed nothing.
+    const wrongType = Object.keys(body).filter(
+      (key) => typeof body[key] !== INTERNAL_HEARTBEAT_FIELDS[key],
+    );
+    if (wrongType.length > 0) {
+      res.status(400).json({
+        error: wrongType
+          .map(
+            (key) =>
+              `${key} must be a ${INTERNAL_HEARTBEAT_FIELDS[key]}, got ${typeof body[key]}`,
+          )
+          .join("; "),
       });
       return;
     }
@@ -1458,11 +1477,11 @@ export function createInternalApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown conversation" });
       return;
     }
-    const updates: HeartbeatUpdate = {};
-    if (typeof body.lastRunAt === "string") updates.lastRunAt = body.lastRunAt;
-    if (typeof body.lastResult === "string") updates.lastResult = body.lastResult;
-    if (typeof body.forceRun === "boolean") updates.forceRun = body.forceRun;
-    if (typeof body.conversationId === "string") updates.conversationId = body.conversationId;
+    // Every key is now known and correctly typed, so applying the body is a
+    // copy rather than a second whitelist that could disagree with the first.
+    const updates = Object.fromEntries(
+      Object.keys(body).map((key) => [key, body[key]]),
+    ) as HeartbeatUpdate;
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
