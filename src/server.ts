@@ -1325,6 +1325,24 @@ export function createPublicApp(deps: ServerDeps): Express {
 }
 
 /**
+ * The only fields the internal `PATCH /heartbeats/:id` applies. It is the
+ * runner engine's own bookkeeping surface and carries no capability gate, so
+ * it stays this narrow on purpose (ADR 0007); everything else about a
+ * heartbeat is configuration and lives on the public route. It carries each
+ * field's type because the handler applies the body straight off this table:
+ * a per-field `if (typeof ...)` ladder beside it is a second copy that can
+ * drift, and a field that drifts out of the ladder goes back to being
+ * accepted-and-ignored, which is the exact failure this table exists to end.
+ * Exported so a test can assert every name here really is applied.
+ */
+export const INTERNAL_HEARTBEAT_FIELDS: Record<string, "string" | "boolean"> = {
+  lastRunAt: "string",
+  lastResult: "string",
+  forceRun: "boolean",
+  conversationId: "string",
+};
+
+/**
  * Internal app (:8081): the agent surface. Guarded by the shared
  * x-agora-token (ADR 0007) when configured — the network boundary keeps it
  * cluster-internal, the token keeps arbitrary in-cluster pods out.
@@ -1410,6 +1428,48 @@ export function createInternalApp(deps: ServerDeps): Express {
     // this cycle, the same way it already writes back lastRunAt/lastResult
     // as a side effect of running. Not a persona-callable tool -- this
     // route has no capability gate, it's the engine's own bookkeeping.
+    //
+    // Everything else a heartbeat has -- workflowId, schedule, enabled,
+    // personaId, name, task, vaultPaths -- is configuration and belongs on
+    // the public route above, which validates it. This route deliberately
+    // does not carry it, and until 2026-08-27 it also did not *say* so: an
+    // unsupported field was dropped and the caller still got
+    // `200 {"status":"updated"}`. Nova's Cycle 402 repointed a heartbeat at
+    // a new workflow through here, read the 200, and lost a whole workflow
+    // run to the old binding before noticing -- and then wrote "PATCH
+    // /heartbeats/:id silently does not change workflowId" onto Edvard's
+    // board as a defect in the feature. It was this lie, not the binding.
+    // So refuse a field this route does not apply, and name the route that
+    // does; a 200 that means "I ignored you" is the expensive answer.
+    const unsupported = Object.keys(body).filter(
+      (key) => !(key in INTERNAL_HEARTBEAT_FIELDS),
+    );
+    if (unsupported.length > 0) {
+      res.status(400).json({
+        error:
+          `this route only updates ${Object.keys(INTERNAL_HEARTBEAT_FIELDS).join(", ")}; ` +
+          `${unsupported.join(", ")} is heartbeat configuration -- ` +
+          `PATCH /heartbeats/:id on the public app updates it`,
+      });
+      return;
+    }
+    // A supported name carrying the wrong type is the same lie one step in:
+    // `{"forceRun": "yes"}` clears the check above, fails the type the store
+    // needs, and would leave with a 200 having changed nothing.
+    const wrongType = Object.keys(body).filter(
+      (key) => typeof body[key] !== INTERNAL_HEARTBEAT_FIELDS[key],
+    );
+    if (wrongType.length > 0) {
+      res.status(400).json({
+        error: wrongType
+          .map(
+            (key) =>
+              `${key} must be a ${INTERNAL_HEARTBEAT_FIELDS[key]}, got ${typeof body[key]}`,
+          )
+          .join("; "),
+      });
+      return;
+    }
     if (
       typeof body.conversationId === "string" &&
       !(await conversations.get(body.conversationId))
@@ -1417,11 +1477,11 @@ export function createInternalApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown conversation" });
       return;
     }
-    const updates: HeartbeatUpdate = {};
-    if (typeof body.lastRunAt === "string") updates.lastRunAt = body.lastRunAt;
-    if (typeof body.lastResult === "string") updates.lastResult = body.lastResult;
-    if (typeof body.forceRun === "boolean") updates.forceRun = body.forceRun;
-    if (typeof body.conversationId === "string") updates.conversationId = body.conversationId;
+    // Every key is now known and correctly typed, so applying the body is a
+    // copy rather than a second whitelist that could disagree with the first.
+    const updates = Object.fromEntries(
+      Object.keys(body).map((key) => [key, body[key]]),
+    ) as HeartbeatUpdate;
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
