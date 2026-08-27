@@ -5,6 +5,7 @@ import type { Express } from "express";
 import {
   createPublicApp,
   createInternalApp,
+  INTERNAL_HEARTBEAT_FIELDS,
   type ServerDeps,
   type WebPushSender,
   type InvokePayload,
@@ -1409,6 +1410,58 @@ describe("agora internal app", () => {
     expect(res.status).toBe(400);
     const reloaded = await deps.heartbeats.get(heartbeat.id);
     expect(reloaded?.conversationId).toBe("c");
+  });
+
+  it("PATCH /heartbeats/:id (internal) refuses a field it would only have ignored", async () => {
+    // Nova Cycle 402 repointed a heartbeat at a new workflow through this
+    // route, read the 200, and the run used the old workflow anyway.
+    const workflow = await deps.workflows.create({ name: "w", steps: [] });
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ workflowId: workflow.id });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("workflowId");
+    expect(res.body.error).toContain("public app");
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.workflowId ?? null).toBeNull();
+  });
+
+  it("PATCH /heartbeats/:id (internal) refuses the whole body, so no half of it lands", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ lastResult: "replied", enabled: false });
+    expect(res.status).toBe(400);
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.lastResult ?? null).toBeNull();
+    expect(reloaded?.enabled).toBe(true);
+  });
+
+  it("every field INTERNAL_HEARTBEAT_FIELDS names is one the route really applies", async () => {
+    // The list is what the 400 above is built from, so a name that drifts out
+    // of the handler would start being accepted-and-ignored again in silence.
+    const conv = await deps.conversations.create("C", "", "anthropic:claude-haiku-4-5-20251001", false, []);
+    const sent: Record<string, unknown> = {
+      lastRunAt: "2026-08-27T11:00:00.000Z",
+      lastResult: "replied 12 chars",
+      forceRun: true,
+      conversationId: conv.id,
+    };
+    expect(Object.keys(sent).sort()).toEqual([...INTERNAL_HEARTBEAT_FIELDS].sort());
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app).patch(`/heartbeats/${heartbeat.id}`).send(sent);
+    expect(res.status).toBe(200);
+    const reloaded = await deps.heartbeats.get(heartbeat.id) as unknown as Record<string, unknown>;
+    for (const field of INTERNAL_HEARTBEAT_FIELDS) {
+      expect(reloaded[field]).toEqual(sent[field]);
+    }
   });
 
   it("POST /audit records entries", async () => {

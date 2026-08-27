@@ -1325,6 +1325,22 @@ export function createPublicApp(deps: ServerDeps): Express {
 }
 
 /**
+ * The only fields the internal `PATCH /heartbeats/:id` applies. It is the
+ * runner engine's own bookkeeping surface and carries no capability gate, so
+ * it stays this narrow on purpose (ADR 0007); everything else about a
+ * heartbeat is configuration and lives on the public route. Exported so a
+ * test can assert every name here really is applied -- a name that drifts out
+ * of the handler below would otherwise start being silently accepted again,
+ * which is the exact failure this list exists to end.
+ */
+export const INTERNAL_HEARTBEAT_FIELDS = [
+  "lastRunAt",
+  "lastResult",
+  "forceRun",
+  "conversationId",
+];
+
+/**
  * Internal app (:8081): the agent surface. Guarded by the shared
  * x-agora-token (ADR 0007) when configured — the network boundary keeps it
  * cluster-internal, the token keeps arbitrary in-cluster pods out.
@@ -1410,6 +1426,31 @@ export function createInternalApp(deps: ServerDeps): Express {
     // this cycle, the same way it already writes back lastRunAt/lastResult
     // as a side effect of running. Not a persona-callable tool -- this
     // route has no capability gate, it's the engine's own bookkeeping.
+    //
+    // Everything else a heartbeat has -- workflowId, schedule, enabled,
+    // personaId, name, task, vaultPaths -- is configuration and belongs on
+    // the public route above, which validates it. This route deliberately
+    // does not carry it, and until 2026-08-27 it also did not *say* so: an
+    // unsupported field was dropped and the caller still got
+    // `200 {"status":"updated"}`. Nova's Cycle 402 repointed a heartbeat at
+    // a new workflow through here, read the 200, and lost a whole workflow
+    // run to the old binding before noticing -- and then wrote "PATCH
+    // /heartbeats/:id silently does not change workflowId" onto Edvard's
+    // board as a defect in the feature. It was this lie, not the binding.
+    // So refuse a field this route does not apply, and name the route that
+    // does; a 200 that means "I ignored you" is the expensive answer.
+    const unsupported = Object.keys(body).filter(
+      (key) => !INTERNAL_HEARTBEAT_FIELDS.includes(key),
+    );
+    if (unsupported.length > 0) {
+      res.status(400).json({
+        error:
+          `this route only updates ${INTERNAL_HEARTBEAT_FIELDS.join(", ")}; ` +
+          `${unsupported.join(", ")} is heartbeat configuration -- ` +
+          `PATCH /heartbeats/:id on the public app updates it`,
+      });
+      return;
+    }
     if (
       typeof body.conversationId === "string" &&
       !(await conversations.get(body.conversationId))
