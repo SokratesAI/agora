@@ -103,12 +103,15 @@ const servers = [
 function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   for (const server of servers) server.close();
-  // Up to FLUSH_MS of counts are only in memory; write them before exiting,
-  // and exit anyway if the write hangs.
-  void routeUsage
+  // Up to FLUSH_MS of counts are only in memory; write them before exiting.
+  // Bounded, so a hung write cannot hold the pod past its termination grace
+  // period — losing the last 30 seconds of a week-long count is the cheaper
+  // failure than a SIGKILL.
+  const flushed = routeUsage
     .flush()
-    .catch((err) => logger.warn({ err }, "route usage flush failed on shutdown"))
-    .finally(() => process.exit(0));
+    .catch((err) => logger.warn({ err }, "route usage flush failed on shutdown"));
+  const deadline = new Promise((resolve) => setTimeout(resolve, 2_000).unref());
+  void Promise.race([flushed, deadline]).finally(() => process.exit(0));
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
