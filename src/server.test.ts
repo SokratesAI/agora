@@ -6,6 +6,7 @@ import {
   createPublicApp,
   createInternalApp,
   INTERNAL_HEARTBEAT_FIELDS,
+  PUBLIC_HEARTBEAT_FIELDS,
   type ServerDeps,
   type WebPushSender,
   type InvokePayload,
@@ -1044,6 +1045,174 @@ describe("agora public app", () => {
     const unmuted = await request(app).patch(`/heartbeats/${id}`).send({ pushNotifications: true });
     expect(unmuted.body.heartbeat.pushNotifications).toBe(true);
     expect((await deps.heartbeats.get(id))?.pushNotifications).toBe(true);
+  });
+
+  it("PATCH /heartbeats/:id refuses a supported field carrying the wrong type", async () => {
+    // The route used to build its update from a `if (typeof ...)` ladder, so
+    // a stringified boolean fell straight out of it and still answered 200.
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const res = await request(app).patch(`/heartbeats/${id}`).send({ enabled: "true" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("enabled must be a boolean, got string");
+    expect((await deps.heartbeats.get(id))?.enabled).toBe(true);
+  });
+
+  it("PATCH /heartbeats/:id refuses a field it does not update", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    // A near-miss on a real field is the case worth naming: `lastResult` is
+    // the engine's, not the Studio's, and dropping it silently is how a
+    // caller concludes the route works.
+    const res = await request(app).patch(`/heartbeats/${id}`).send({ lastResult: "done" });
+    expect(res.status).toBe(400);
+    // Assert the unknown-key branch specifically, not just any 400: an
+    // unknown key also fails the type check below it (its declared type is
+    // `undefined`), so a message naming only the field would still pass with
+    // this guard deleted. The list of legal names is what tells them apart.
+    expect(res.body.error).toContain("this route does not update lastResult");
+    expect(res.body.error).toContain("it updates name, personaId");
+    expect((await deps.heartbeats.get(id))?.lastResult ?? null).toBeNull();
+  });
+
+  it("PATCH /heartbeats/:id refuses the whole body, so no half of it lands", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const res = await request(app)
+      .patch(`/heartbeats/${id}`)
+      .send({ name: "renamed", enabled: "false" });
+    expect(res.status).toBe(400);
+    expect((await deps.heartbeats.get(id))?.name).toBe("hb");
+  });
+
+  it("PATCH /heartbeats/:id says which shape a wrongly-typed field arrived as", async () => {
+    // `typeof` answers "object" for both null and an array, which tells the
+    // caller nothing about what they actually sent.
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const nulled = await request(app).patch(`/heartbeats/${id}`).send({ name: null });
+    expect(nulled.body.error).toContain("name must be a string, got null");
+    const arrayed = await request(app).patch(`/heartbeats/${id}`).send({ task: ["a"] });
+    expect(arrayed.body.error).toContain("task must be a string, got an array");
+    const mixed = await request(app).patch(`/heartbeats/${id}`).send({ vaultPaths: ["a", 2] });
+    expect(mixed.body.error).toContain("vaultPaths must be an array of strings");
+  });
+
+  it("PATCH /heartbeats/:id switches a heartbeat onto a channel that does not exist yet", async () => {
+    // The Studio's edit form offers "New channel" and sends
+    // newConversationName; PATCH used to drop it and save green, leaving the
+    // heartbeat speaking into its old conversation.
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const res = await request(app)
+      .patch(`/heartbeats/${id}`)
+      .send({ newConversationName: "Fresh channel" });
+    expect(res.status).toBe(200);
+    const moved = (await deps.heartbeats.get(id))?.conversationId;
+    expect(moved).not.toBe(conversation.id);
+    expect((await deps.conversations.get(moved as string))?.name).toBe("Fresh channel");
+    // And it is resolved, never written through as a field of its own.
+    expect(
+      (await deps.heartbeats.get(id)) as unknown as Record<string, unknown>,
+    ).not.toHaveProperty("newConversationName");
+  });
+
+  it("PATCH /heartbeats/:id refuses an ambiguous or empty channel switch", async () => {
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const both = await request(app)
+      .patch(`/heartbeats/${id}`)
+      .send({ conversationId: conversation.id, newConversationName: "Fresh" });
+    expect(both.status).toBe(400);
+    expect(both.body.error).toContain("not both");
+    const empty = await request(app)
+      .patch(`/heartbeats/${id}`)
+      .send({ newConversationName: "" });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error).toContain("cannot be empty");
+    expect((await deps.heartbeats.get(id))?.conversationId).toBe(conversation.id);
+  });
+
+  it("every field PUBLIC_HEARTBEAT_FIELDS names is one the route really applies", async () => {
+    // The list is what both 400s above are built from, so a name that drifts
+    // out of the handler goes back to being accepted-and-ignored in silence.
+    const { persona, conversation } = await createHeartbeatFixtures();
+    const other = await deps.conversations.create(
+      "Other",
+      "",
+      "anthropic:claude-haiku-4-5-20251001",
+      false,
+      [],
+    );
+    const workflow = await deps.workflows.create({ name: "w", steps: [] });
+    const created = await request(app).post("/heartbeats").send({
+      name: "hb",
+      personaId: persona.id,
+      conversationId: conversation.id,
+      schedule: "every@30m",
+    });
+    const id = created.body.heartbeat.id;
+    const sent: Record<string, unknown> = {
+      name: "renamed",
+      personaId: persona.id,
+      conversationId: other.id,
+      schedule: "every@2h",
+      task: "do the thing",
+      workflowId: workflow.id,
+      vaultPaths: ["a/b.md"],
+      enabled: false,
+      rotateConversationEachRun: true,
+      conversationRetention: 5,
+      pushNotifications: false,
+    };
+    // newConversationName is deliberately not sent here: it is the one name
+    // in the table that is resolved rather than stored, and it conflicts
+    // with the conversationId this case is asserting.
+    expect([...Object.keys(sent), "newConversationName"].sort()).toEqual(
+      Object.keys(PUBLIC_HEARTBEAT_FIELDS).sort(),
+    );
+    const res = await request(app).patch(`/heartbeats/${id}`).send(sent);
+    expect(res.status).toBe(200);
+    const stored = (await deps.heartbeats.get(id)) as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(sent)) {
+      expect(stored[key]).toEqual(value);
+    }
   });
 
   it("POST /heartbeats/:id/run queues a forced run", async () => {
