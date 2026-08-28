@@ -968,6 +968,39 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   app.patch("/heartbeats/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
+    // The same lie the internal route told until 2026-08-27, one door over:
+    // this handler used a per-field `if (typeof ...)` ladder to build its
+    // update, so a key it did not recognise -- or a key it recognised
+    // carrying the wrong type -- fell out of the ladder, changed nothing,
+    // and still left with `200 {"status":"updated"}`. `{"enabled": "true"}`
+    // from a caller that stringified its booleans reads as a saved change
+    // and is not one. Refuse instead, and name what went wrong; a 200 that
+    // means "I ignored you" is the expensive answer (idea #94).
+    const unsupported = Object.keys(body).filter(
+      (key) => !(key in PUBLIC_HEARTBEAT_FIELDS),
+    );
+    if (unsupported.length > 0) {
+      res.status(400).json({
+        error:
+          `this route does not update ${unsupported.join(", ")}; ` +
+          `it updates ${Object.keys(PUBLIC_HEARTBEAT_FIELDS).join(", ")}`,
+      });
+      return;
+    }
+    const wrongType = Object.keys(body).filter(
+      (key) => !matchesFieldType(body[key], PUBLIC_HEARTBEAT_FIELDS[key]),
+    );
+    if (wrongType.length > 0) {
+      res.status(400).json({
+        error: wrongType
+          .map(
+            (key) =>
+              `${key} must be ${PUBLIC_HEARTBEAT_FIELDS[key]}, got ${describeType(body[key])}`,
+          )
+          .join("; "),
+      });
+      return;
+    }
     if (body.schedule !== undefined && !isValidSchedule(body.schedule as string)) {
       res.status(400).json({ error: SCHEDULE_ERROR });
       return;
@@ -983,6 +1016,18 @@ export function createPublicApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown conversation" });
       return;
     }
+    // Both together is ambiguous rather than harmless -- one of the two has
+    // to win silently, and this route's whole subject is not doing that.
+    if (body.conversationId !== undefined && body.newConversationName !== undefined) {
+      res.status(400).json({
+        error: "send conversationId or newConversationName, not both",
+      });
+      return;
+    }
+    if (body.newConversationName === "") {
+      res.status(400).json({ error: "newConversationName cannot be empty" });
+      return;
+    }
     if (
       body.workflowId !== undefined &&
       body.workflowId !== null &&
@@ -991,29 +1036,35 @@ export function createPublicApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "unknown workflow" });
       return;
     }
-    const updates: HeartbeatUpdate = {};
-    if (typeof body.name === "string") updates.name = body.name;
-    if (typeof body.personaId === "string") updates.personaId = body.personaId;
-    if (typeof body.conversationId === "string") updates.conversationId = body.conversationId;
-    if (typeof body.schedule === "string") updates.schedule = body.schedule;
-    if (typeof body.task === "string") updates.task = body.task;
-    if (typeof body.workflowId === "string" || body.workflowId === null) {
-      updates.workflowId = body.workflowId;
-    }
-    if (Array.isArray(body.vaultPaths)) {
-      updates.vaultPaths = (body.vaultPaths as unknown[]).filter(
-        (p): p is string => typeof p === "string",
+    // Every key is now known and correctly typed, so applying the body is a
+    // copy rather than a second whitelist that could disagree with the first.
+    const { newConversationName, ...rest } = body;
+    const updates = rest as HeartbeatUpdate;
+    // `newConversationName` is the Studio's edit form switching a heartbeat
+    // onto a channel that does not exist yet. POST /heartbeats has always
+    // honoured it; PATCH never did, so choosing "New channel" while editing
+    // saved green and left the heartbeat speaking into its old conversation.
+    if (typeof newConversationName === "string" && newConversationName.length > 0) {
+      const existing = await heartbeats.get(req.params.id);
+      if (!existing) {
+        res.status(404).json({ error: "heartbeat not found" });
+        return;
+      }
+      // The form may be repointing the persona in the same save, and the new
+      // channel belongs to whichever persona the heartbeat ends up with.
+      const persona = await personas.get(
+        typeof body.personaId === "string" ? body.personaId : existing.personaId,
       );
-    }
-    if (typeof body.enabled === "boolean") updates.enabled = body.enabled;
-    if (typeof body.rotateConversationEachRun === "boolean") {
-      updates.rotateConversationEachRun = body.rotateConversationEachRun;
-    }
-    if (typeof body.conversationRetention === "number") {
-      updates.conversationRetention = body.conversationRetention;
-    }
-    if (typeof body.pushNotifications === "boolean") {
-      updates.pushNotifications = body.pushNotifications;
+      if (!persona) {
+        res.status(400).json({ error: "unknown persona" });
+        return;
+      }
+      const conversation = await findOrCreateConversationForPersona(
+        newConversationName,
+        persona,
+        deps,
+      );
+      updates.conversationId = conversation.id;
     }
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
@@ -1358,6 +1409,64 @@ export function createPublicApp(deps: ServerDeps): Express {
   });
 
   return app;
+}
+
+/**
+ * Every field the public `PATCH /heartbeats/:id` applies, with the type it
+ * has to arrive as. The handler checks the body against this table and then
+ * applies it wholesale, so there is no second per-field ladder to drift out
+ * of — that drift is what made the route accept-and-ignore in the first
+ * place. `newConversationName` is here because the Studio's edit form sends
+ * it; it is not a stored field, and the handler resolves it to a
+ * conversationId rather than writing it through.
+ * Exported so a test can assert every name here really is applied.
+ */
+export const PUBLIC_HEARTBEAT_FIELDS: Record<string, FieldType> = {
+  name: "a string",
+  personaId: "a string",
+  conversationId: "a string",
+  newConversationName: "a string",
+  schedule: "a string",
+  task: "a string",
+  workflowId: "a string or null",
+  vaultPaths: "an array of strings",
+  enabled: "a boolean",
+  rotateConversationEachRun: "a boolean",
+  conversationRetention: "a number",
+  pushNotifications: "a boolean",
+};
+
+/** The type vocabulary PUBLIC_HEARTBEAT_FIELDS is written in — the strings
+ * double as the error message, so there is one place to read for what a
+ * field accepts and no second table mapping a tag to prose. */
+type FieldType =
+  | "a string"
+  | "a boolean"
+  | "a number"
+  | "a string or null"
+  | "an array of strings";
+
+function matchesFieldType(value: unknown, type: FieldType): boolean {
+  switch (type) {
+    case "a string":
+      return typeof value === "string";
+    case "a boolean":
+      return typeof value === "boolean";
+    case "a number":
+      return typeof value === "number";
+    case "a string or null":
+      return typeof value === "string" || value === null;
+    case "an array of strings":
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
+  }
+}
+
+/** `typeof` alone answers "object" for null and for an array, which is the
+ * least useful thing it could say to someone who sent the wrong shape. */
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value;
 }
 
 /**
