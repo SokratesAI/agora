@@ -21,6 +21,7 @@ import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
 import { FolderStore } from "./chat/folder-store.js";
+import { RouteUsageStore } from "./chat/route-usage-store.js";
 import type { Config } from "./config.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -66,6 +67,9 @@ async function makeDeps(configOverrides: Partial<Config> = {}): Promise<
     audit: new AuditStore(dir),
     attachments: new AttachmentStore(dir),
     folders: new FolderStore(dir),
+    // 60s so no flush timer fires into a torn-down temp dir; these tests read
+    // the snapshot, not the file.
+    routeUsage: new RouteUsageStore(dir, 60_000),
     webPush,
     logger: pino({ enabled: false }),
     invokeRunner: invokeMock,
@@ -83,6 +87,51 @@ describe("agora public app", () => {
 
   it("GET /healthz always returns 200", async () => {
     expect((await request(app).get("/healthz")).status).toBe(200);
+  });
+
+  describe("route usage", () => {
+    it("records a matched request under its route template, not its URL", async () => {
+      // Two different ids, so a store keying on the URL would show two entries.
+      await request(app).get("/conversations/conv-aaa/messages");
+      await request(app).get("/conversations/conv-bbb/messages");
+
+      const usage = await request(app).get("/route-usage");
+      expect(usage.status).toBe(200);
+      const entry = usage.body.entries.find(
+        (e: { key: string }) => e.key === "GET /conversations/:id/messages",
+      );
+      expect(entry).toBeDefined();
+      expect(entry.count).toBe(2);
+      expect(entry.unmatched).toBe(false);
+      // The id is what makes this worth doing at the template level: an id in
+      // a key would put one entry per conversation in the file.
+      expect(JSON.stringify(usage.body)).not.toContain("conv-aaa");
+    });
+
+    it("records a request no route matched under its path", async () => {
+      await request(app).get("/definitely-not-a-route");
+
+      const usage = await request(app).get("/route-usage");
+      const entry = usage.body.entries.find(
+        (e: { key: string }) => e.key === "GET /definitely-not-a-route",
+      );
+      expect(entry).toBeDefined();
+      expect(entry.unmatched).toBe(true);
+      expect(entry.statuses).toEqual({ "404": 1 });
+    });
+
+    it("keeps the caller's user-agent", async () => {
+      await request(app).get("/healthz").set("user-agent", "Python-urllib/3.11");
+
+      const usage = await request(app).get("/route-usage");
+      const entry = usage.body.entries.find((e: { key: string }) => e.key === "GET /healthz");
+      expect(entry.agents["Python-urllib/3.11"]).toBe(1);
+    });
+
+    it("503s rather than lying when no store is wired", async () => {
+      const unwired = createPublicApp({ ...deps, routeUsage: undefined });
+      expect((await request(unwired).get("/route-usage")).status).toBe(503);
+    });
   });
 
   it("GET /health reflects VAPID configuration", async () => {

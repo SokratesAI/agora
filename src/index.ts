@@ -14,6 +14,7 @@ import { WorkflowStore } from "./chat/workflow-store.js";
 import { AuditStore } from "./chat/audit-store.js";
 import { AttachmentStore } from "./chat/attachment-store.js";
 import { FolderStore } from "./chat/folder-store.js";
+import { RouteUsageStore } from "./chat/route-usage-store.js";
 import { runStartupMigration } from "./migrate.js";
 import { createPublicApp, createInternalApp, type InvokePayload, type ServerDeps } from "./server.js";
 
@@ -28,6 +29,7 @@ const workflows = new WorkflowStore(config.dataDir);
 const audit = new AuditStore(config.dataDir);
 const attachments = new AttachmentStore(config.dataDir);
 const folders = new FolderStore(config.dataDir);
+const routeUsage = new RouteUsageStore(config.dataDir);
 
 if (config.vapidPublicKey && config.vapidPrivateKey) {
   webpush.setVapidDetails(config.vapidSubject, config.vapidPublicKey, config.vapidPrivateKey);
@@ -72,6 +74,7 @@ const deps: ServerDeps = {
   audit,
   attachments,
   folders,
+  routeUsage,
   webPush: webpush,
   logger,
   invokeRunner,
@@ -80,6 +83,10 @@ const deps: ServerDeps = {
 // Idempotent — see migrate.ts. Runs to completion before either listener
 // opens so no request ever sees a half-migrated store.
 await runStartupMigration({ conversations, personas, messages, logger });
+
+// Counts from previous pods, so a deploy does not restart the week-long
+// window /route-usage exists to hold (route-usage-store.ts).
+await routeUsage.load();
 
 const publicApp = createPublicApp(deps);
 const internalApp = createInternalApp(deps);
@@ -96,7 +103,12 @@ const servers = [
 function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   for (const server of servers) server.close();
-  process.exit(0);
+  // Up to FLUSH_MS of counts are only in memory; write them before exiting,
+  // and exit anyway if the write hangs.
+  void routeUsage
+    .flush()
+    .catch((err) => logger.warn({ err }, "route usage flush failed on shutdown"))
+    .finally(() => process.exit(0));
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
