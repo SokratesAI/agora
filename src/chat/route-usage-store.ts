@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
  *
  * Nothing already here answers it, measured against the live pod on
  * 2026-08-28. `http_server_duration_count` on :9464 carries method, status,
- * scheme and host and **no `http.route` label**, so it separates Edvard's
+ * scheme and host and **no `http.route` label**, so it separates the owner's
  * phone from cluster traffic and says nothing about which path either asked
  * for. Prometheus does scrape that endpoint and keeps 7 days of it, but
  * `prometheus.infra.svc.cluster.local:9090` answers neither of Nova's two
@@ -78,7 +78,7 @@ const MAX_OVERFLOW_NAMES = 50;
 
 /**
  * How long counts may sit only in memory. Writing on every request would put
- * an fsync in front of Edvard's phone for a number that is read once a week;
+ * an fsync in front of the owner's phone for a number that is read once a week;
  * batching means an unclean kill loses at most this much. That is acceptable
  * for a seven-day aggregate and would not be for an audit trail, which is why
  * this is a separate store rather than rows in AuditStore (whose 500-entry cap
