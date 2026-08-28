@@ -99,6 +99,7 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "githubWrite",
     "githubMerge",
     "terminalExec",
+    "novaCapture",
   ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }

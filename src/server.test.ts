@@ -304,6 +304,43 @@ describe("agora public app", () => {
     expect(on.body.persona.capabilities.terminalExec).toBe(true);
   });
 
+  // 2026-08-28: the runner has had a nova_capture tool and a novaCapture
+  // capability key for weeks, but this key was missing from
+  // PersonaCapabilities and from parseCapabilities' allowlist, so a request
+  // asking for it was silently dropped and no persona could ever hold it.
+  // The owner asked a chat persona to file an issue and it could not.
+  it("POST /personas accepts the novaCapture capability flag, defaulted off", async () => {
+    const off = await request(app).post("/personas").send({
+      name: "NoCapture",
+      model: "anthropic:claude-sonnet-5",
+    });
+    expect(off.body.persona.capabilities.novaCapture).toBe(false);
+
+    const on = await request(app).post("/personas").send({
+      name: "Capturer",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { novaCapture: true },
+    });
+    expect(on.status).toBe(201);
+    expect(on.body.persona.capabilities.novaCapture).toBe(true);
+  });
+
+  it("PATCH /personas/:id can grant novaCapture without touching other capabilities", async () => {
+    const created = await request(app).post("/personas").send({
+      name: "Later",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { vaultRead: true },
+    });
+    const id = created.body.persona.id;
+    const patched = await request(app)
+      .patch(`/personas/${id}`)
+      .send({ capabilities: { novaCapture: true } });
+    expect(patched.status).toBe(200);
+    expect(patched.body.persona.capabilities.novaCapture).toBe(true);
+    expect(patched.body.persona.capabilities.vaultRead).toBe(true);
+    expect(patched.body.persona.capabilities.terminalExec).toBe(false);
+  });
+
   it("DELETE /personas/:id refuses while referenced by a conversation or heartbeat", async () => {
     const created = await request(app)
       .post("/personas")

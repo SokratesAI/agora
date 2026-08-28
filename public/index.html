@@ -809,6 +809,7 @@
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-githubWrite" /> GitHub: open PRs (any repo the bot account can reach)</label>
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-githubMerge" /> GitHub: merge PRs (only once every check is green)</label>
           <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-terminalExec" /> Terminal: run shell commands in the runner pod (unrestricted — highest-risk capability)</label>
+          <label class="checkbox-row"><input type="checkbox" id="new-chat-cap-novaCapture" /> File a capture: add one line to your issues.md or ideas.md backlog</label>
         </div>
         <p class="modal-hint">Enforced by the runner per call — cluster/system access is never available at any setting. Writes are audit-logged (Activity). Only applies when creating a new persona here — picking an existing one above uses its own saved capabilities.</p>
       </div>
@@ -882,6 +883,7 @@
         <label class="checkbox-row"><input type="checkbox" id="cap-githubWrite" /> GitHub: open PRs (any repo the bot account can reach)</label>
         <label class="checkbox-row"><input type="checkbox" id="cap-githubMerge" /> GitHub: merge PRs (only once every check is green)</label>
         <label class="checkbox-row"><input type="checkbox" id="cap-terminalExec" /> Terminal: run shell commands in the runner pod (unrestricted — highest-risk capability)</label>
+        <label class="checkbox-row"><input type="checkbox" id="cap-novaCapture" /> File a capture: add one line to your issues.md or ideas.md backlog</label>
       </div>
       <p class="modal-hint">Enforced by the runner per call — cluster/system access is never available at any setting. Writes are audit-logged (Activity).</p>
       <h3>Persistent memory (cross-conversation)</h3>
