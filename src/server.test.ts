@@ -859,6 +859,30 @@ describe("agora public app", () => {
     expect(conversation?.messages).toHaveLength(1); // ask persisted nothing
   });
 
+  it("ask sends the conversation's own model, not the curator persona's", async () => {
+    // Idea #95, slice 1, one route over. The runner resolves the model off
+    // the persona when it is handed only a `personaId` -- and one persona
+    // curates hundreds of conversations, so a model picked here changed
+    // nothing about what Ask actually ran.
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Asky", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    await request(app)
+      .patch(`/conversations/${id}`)
+      .send({ model: "claude-cli:claude-haiku-4-5-20251001" });
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.personaId).toBe(created.body.conversation.personas[0].personaId);
+    expect(payload.model).toBe("claude-cli:claude-haiku-4-5-20251001");
+
+    // The persona is untouched -- that is the whole point of the split.
+    const persona = await deps.personas.get(created.body.conversation.personas[0].personaId);
+    expect(persona?.model).toBe("anthropic:claude-sonnet-5");
+  });
+
   it("ask excludes forgotten messages from the context it sends", async () => {
     const created = await request(app)
       .post("/conversations")

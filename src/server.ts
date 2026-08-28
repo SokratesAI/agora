@@ -44,6 +44,11 @@ const VALID_MODEL_IDS = new Set(MODEL_CATALOG.map((m) => m.id));
  * or inline persona fields (preview of an unsaved draft; always tool-less). */
 export interface InvokePayload {
   personaId?: string;
+  /** The conversation's own model, sent alongside `personaId` so the runner
+   * overrides only the model and still reads personality, memory and tool
+   * grants off the shared persona (idea #95, slice 1). Omitted when the
+   * conversation has no model of its own, which falls back to the persona. */
+  model?: string;
   persona?: { personality: string; model: string; thinking: boolean };
   messages: { role: "user" | "assistant"; content: string }[];
 }
@@ -1389,8 +1394,17 @@ export function createPublicApp(deps: ServerDeps): Express {
       return;
     }
     const curator = conversation.personas?.find((p) => p.role === "curator");
+    // Ask has to resolve the model the same way `enrichConversation` and the
+    // turn engine already do — conversation first, curator as the fallback
+    // (idea #95, slice 1). Sending `personaId` alone made the runner read the
+    // model off the persona, and one persona curates hundreds of
+    // conversations, so a model picked here had no effect on Ask at all.
     const payload: InvokePayload = curator
-      ? { personaId: curator.personaId, messages: toInvokeMessages(conversation, text) }
+      ? {
+          personaId: curator.personaId,
+          ...(conversation.model ? { model: conversation.model } : {}),
+          messages: toInvokeMessages(conversation, text),
+        }
       : {
           persona: {
             personality: conversation.personality,
