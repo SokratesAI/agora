@@ -45,6 +45,22 @@ export interface PersonaCapabilities {
    * so it carries the union of this pod's kubectl RBAC and GitHub bot token
    * — the highest blast-radius capability in this list. Defaults off. */
   terminalExec: boolean;
+  /** Lets the persona file one line in the owner's own backlog via the
+   * runner's nova_capture tool — a bare bullet at the top of issues.md or
+   * ideas.md, which the next Nova cycle reads as his strongest signal.
+   *
+   * Deliberately NOT part of vaultWrite: that capability advertises
+   * vault_write/vault_append, which can address any document in the vault,
+   * and the whole point of this one is that it can only ever add a line to
+   * one of a few files it does not choose.
+   *
+   * Added 2026-08-28. The runner has had the tool and the capability key
+   * since the journal-card reply turn was built, but this interface did not
+   * carry the key and parseCapabilities dropped it, so it could be granted
+   * to that one internal turn and to no persona at all. The owner asked the
+   * "Claude" persona to file an issue and it could not; his words were that
+   * this is "the most basic thing it should be able to do". Defaults off. */
+  novaCapture: boolean;
 }
 
 export interface Persona {
@@ -104,6 +120,7 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   githubWrite: false,
   githubMerge: false,
   terminalExec: false,
+  novaCapture: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as
