@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { RouteUsageStore } from "./route-usage-store.js";
+import { RouteUsageStore, redactPath } from "./route-usage-store.js";
 
 let dir: string;
 
@@ -129,6 +129,26 @@ describe("RouteUsageStore", () => {
 
     const [key] = Object.keys(s.snapshot().entries[0].agents);
     expect(key).toHaveLength(160);
+  });
+
+  it("redacts an id out of an unmatched path", async () => {
+    const s = store();
+    await s.load();
+    // The reviewer's case: express leaves req.route unset on a method
+    // mismatch too, so a stale client PUTting a real conversation URL used to
+    // store the id verbatim in a file GET /route-usage serves.
+    s.record("PUT", undefined, "/conversations/super-secret-conversation-id-42", "stale", 404);
+
+    const [entry] = s.snapshot().entries;
+    expect(entry.key).toBe("PUT /conversations/*");
+    expect(JSON.stringify(s.snapshot())).not.toContain("super-secret");
+  });
+
+  it("keeps the asset filenames the measurement is actually for", () => {
+    expect(redactPath("/app.js")).toBe("/app.js");
+    expect(redactPath("/assets/main.css")).toBe("/assets/main.css");
+    expect(redactPath("/")).toBe("/");
+    expect(redactPath("/conversations/abc/messages")).toBe("/conversations/*/*");
   });
 
   it("starts clean rather than refusing to run on a corrupt file", async () => {

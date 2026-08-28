@@ -108,7 +108,7 @@ describe("agora public app", () => {
       expect(JSON.stringify(usage.body)).not.toContain("conv-aaa");
     });
 
-    it("records a request no route matched under its path", async () => {
+    it("records a request no route matched under its redacted path", async () => {
       await request(app).get("/definitely-not-a-route");
 
       const usage = await request(app).get("/route-usage");

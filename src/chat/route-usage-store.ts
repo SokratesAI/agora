@@ -22,7 +22,8 @@ import { randomUUID } from "node:crypto";
  * So: counts in memory, an aggregate on the same disk as every other store,
  * and `GET /route-usage` to read it. It records the route *template*, not the
  * URL — `/conversations/:id`, never the id — so nothing user-typed and no
- * query string is retained. The user-agent string is kept verbatim (truncated)
+ * query string is retained. A request no route matched has no template, so its
+ * path is redacted instead: see `redactPath` for exactly what survives. The user-agent string is kept verbatim (truncated)
  * because it is the one field that distinguishes a browser from the runner's
  * urllib, which is the actual question being asked.
  */
@@ -160,7 +161,7 @@ export class RouteUsageStore {
     statusCode: number,
   ): void {
     const unmatched = routeTemplate === undefined;
-    const target = unmatched ? rawPath.slice(0, MAX_PATH_CHARS) : routeTemplate;
+    const target = unmatched ? redactPath(rawPath) : routeTemplate;
     const wanted = `${method} ${target}`;
     const now = new Date().toISOString();
 
@@ -239,6 +240,36 @@ export class RouteUsageStore {
     }
     await fs.rename(tmpPath, this.file);
   }
+}
+
+/**
+ * An unmatched path is whatever the caller sent, so it cannot be stored raw.
+ * Express leaves `req.route` unset when the *method* does not match as well as
+ * when the path does not, so `PUT /conversations/<real id>` from a stale
+ * client — the exact caller this whole store exists to find — lands here
+ * carrying a real conversation id.
+ *
+ * The rule: keep the first segment, which is a collection name in every route
+ * this app has and never an id, and replace every later segment with `*`
+ * unless it carries a file extension. That keeps the only thing being
+ * measured — `/app.js`, `/assets/main.css`, whether anything still fetches
+ * `public/` — and turns `/conversations/<id>` into `/conversations/*`, which
+ * still says a stale client is calling that API without saying what it asked
+ * for.
+ */
+export function redactPath(rawPath: string): string {
+  // A path always starts with "/", so split() yields a leading "" that is the
+  // separator, not a segment. Keeping it is what makes the join round-trip.
+  const parts = rawPath.slice(0, MAX_PATH_CHARS).split("/");
+  let seen = 0;
+  return parts
+    .map((seg) => {
+      if (seg === "") return seg;
+      seen += 1;
+      if (seen === 1) return /^[A-Za-z0-9._-]{1,40}$/.test(seg) ? seg : "*";
+      return seg.includes(".") && /^[A-Za-z0-9._-]{1,40}$/.test(seg) ? seg : "*";
+    })
+    .join("/");
 }
 
 function blank(key: string, unmatched: boolean, now: string): RouteUsageEntry {
