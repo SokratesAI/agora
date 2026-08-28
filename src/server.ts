@@ -28,6 +28,7 @@ import { wouldCreateCycle } from "./chat/workflow-store.js";
 import type { AuditStore } from "./chat/audit-store.js";
 import { MAX_ATTACHMENT_BYTES, type AttachmentStore } from "./chat/attachment-store.js";
 import type { FolderStore } from "./chat/folder-store.js";
+import type { RouteUsageStore } from "./chat/route-usage-store.js";
 import { MODEL_CATALOG } from "./models.js";
 import {
   notificationsSent,
@@ -65,6 +66,9 @@ export interface ServerDeps {
   audit: AuditStore;
   attachments: AttachmentStore;
   folders: FolderStore;
+  /** Optional so every existing test that builds a ServerDeps by hand keeps
+   * compiling; when absent nothing is counted and /route-usage 503s. */
+  routeUsage?: RouteUsageStore;
   webPush: WebPushSender;
   logger: pino.Logger;
   /** undefined → ask/preview return 503 (RUNNER_URL not configured). */
@@ -641,7 +645,7 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
  * platform (agent-facing writes live on the internal app, ADR 0007).
  */
 export function createPublicApp(deps: ServerDeps): Express {
-  const { config, store, conversations, personas, heartbeats, workflows, audit, attachments, logger } = deps;
+  const { config, store, conversations, personas, heartbeats, workflows, audit, attachments, logger, routeUsage } = deps;
   const app = express();
   // Memory storage — files are small (MAX_ATTACHMENT_BYTES caps it) and
   // written straight through to AttachmentStore's own disk layout; no
@@ -674,6 +678,26 @@ export function createPublicApp(deps: ServerDeps): Express {
   //
   // Must precede express.static so the frontend is compressed too.
   app.use(compression());
+  // Count every request by route template. Registered ahead of express.static
+  // on purpose: a request for `public/app.js` never reaches a route handler,
+  // and whether anything still asks for those assets is the question issue
+  // #119 turns on. `req.route` is undefined here and set by the router before
+  // `finish` fires, so the template is read in the listener, not now.
+  app.use((req, res, next) => {
+    if (routeUsage) {
+      res.on("finish", () => {
+        const template = (req as { route?: { path?: unknown } }).route?.path;
+        routeUsage.record(
+          req.method,
+          typeof template === "string" ? template : undefined,
+          req.path,
+          req.get("user-agent"),
+          res.statusCode,
+        );
+      });
+    }
+    next();
+  });
   app.use(express.json());
   app.use(express.static("public"));
 
@@ -1120,6 +1144,17 @@ export function createPublicApp(deps: ServerDeps): Express {
   app.get("/audit", async (req, res) => {
     const limit = Number(req.query.limit ?? 100);
     res.status(200).json({ entries: await audit.list(Number.isFinite(limit) ? limit : 100) });
+  });
+
+  // ---- Route usage ------------------------------------------------------
+  // Read once a week, by a Nova cycle, to decide whether `public/` has any
+  // caller left (issue #119). Not rendered anywhere.
+  app.get("/route-usage", (_req, res) => {
+    if (!routeUsage) {
+      res.status(503).json({ error: "route usage not configured" });
+      return;
+    }
+    res.status(200).json(routeUsage.snapshot());
   });
 
   // ---- Conversations ----------------------------------------------------
