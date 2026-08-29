@@ -105,6 +105,7 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "githubMerge",
     "terminalExec",
     "novaCapture",
+    "conversationRead",
   ] as const) {
     if (typeof b[key] === "boolean") out[key] = b[key];
   }

@@ -61,6 +61,17 @@ export interface PersonaCapabilities {
    * "Claude" persona to file an issue and it could not; his words were that
    * this is "the most basic thing it should be able to do". Defaults off. */
   novaCapture: boolean;
+  /** Lets the persona list and read Agora conversations OTHER than the one
+   * it is in, via the runner's list_conversations/read_conversation tools.
+   * Read-only.
+   *
+   * Added 2026-08-29. Those two tools shipped 2026-08-28 gated on
+   * manageAgora, which also creates personas, conversations, heartbeats and
+   * workflows — so "read that other conversation", which the owner called a
+   * basic thing a persona should do (Issues.md #125), cost a full
+   * platform-management grant. manageAgora still implies this one on the
+   * runner side, so no persona loses a tool. Defaults off. */
+  conversationRead: boolean;
 }
 
 export interface Persona {
@@ -121,6 +132,7 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   githubMerge: false,
   terminalExec: false,
   novaCapture: false,
+  conversationRead: false,
 };
 
 /** Same one-file-per-record, atomic-write + write-queue shape as

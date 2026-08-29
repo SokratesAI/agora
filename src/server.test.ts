@@ -342,6 +342,45 @@ describe("agora public app", () => {
     expect(patched.body.persona.capabilities.terminalExec).toBe(false);
   });
 
+  // 2026-08-29 (Cycle 613): list_conversations/read_conversation shipped
+  // gated on manageAgora, which also creates personas, conversations,
+  // heartbeats and workflows. So the only way to let a chat persona read
+  // another conversation was to make it a platform admin. conversationRead
+  // is that grant on its own; manageAgora still implies it in the runner.
+  it("POST /personas accepts the conversationRead capability flag, defaulted off", async () => {
+    const off = await request(app).post("/personas").send({
+      name: "NoReader",
+      model: "anthropic:claude-sonnet-5",
+    });
+    expect(off.body.persona.capabilities.conversationRead).toBe(false);
+
+    const on = await request(app).post("/personas").send({
+      name: "Reader",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { conversationRead: true },
+    });
+    expect(on.status).toBe(201);
+    expect(on.body.persona.capabilities.conversationRead).toBe(true);
+    // The whole point: it does NOT come with platform management.
+    expect(on.body.persona.capabilities.manageAgora).toBe(false);
+  });
+
+  it("PATCH /personas/:id can grant conversationRead without touching other capabilities", async () => {
+    const created = await request(app).post("/personas").send({
+      name: "LaterReader",
+      model: "anthropic:claude-sonnet-5",
+      capabilities: { vaultRead: true },
+    });
+    const id = created.body.persona.id;
+    const patched = await request(app)
+      .patch(`/personas/${id}`)
+      .send({ capabilities: { conversationRead: true } });
+    expect(patched.status).toBe(200);
+    expect(patched.body.persona.capabilities.conversationRead).toBe(true);
+    expect(patched.body.persona.capabilities.vaultRead).toBe(true);
+    expect(patched.body.persona.capabilities.manageAgora).toBe(false);
+  });
+
   it("DELETE /personas/:id refuses while referenced by a conversation or heartbeat", async () => {
     const created = await request(app)
       .post("/personas")
