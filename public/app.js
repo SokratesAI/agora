@@ -106,6 +106,7 @@ const newChatCapGithubWrite = $("new-chat-cap-githubWrite");
 const newChatCapGithubMerge = $("new-chat-cap-githubMerge");
 const newChatCapTerminalExec = $("new-chat-cap-terminalExec");
 const newChatCapNovaCapture = $("new-chat-cap-novaCapture");
+const newChatCapConversationRead = $("new-chat-cap-conversationRead");
 const newChatStatus = $("new-chat-status");
 const newChatCancel = $("new-chat-cancel");
 
@@ -153,6 +154,7 @@ const capGithubWrite = $("cap-githubWrite");
 const capGithubMerge = $("cap-githubMerge");
 const capTerminalExec = $("cap-terminalExec");
 const capNovaCapture = $("cap-novaCapture");
+const capConversationRead = $("cap-conversationRead");
 
 const heartbeatStudioScrim = $("heartbeat-studio-scrim");
 const heartbeatStudioList = $("heartbeat-studio-list");
@@ -1184,6 +1186,7 @@ newChatModal.addEventListener("submit", async (event) => {
           githubMerge: newChatCapGithubMerge.checked,
           terminalExec: newChatCapTerminalExec.checked,
           novaCapture: newChatCapNovaCapture.checked,
+          conversationRead: newChatCapConversationRead.checked,
         },
       };
   const { ok, data } = await api("POST", "/conversations", body);
@@ -1203,13 +1206,14 @@ function personaMeta(persona) {
   const enabled = [
     "webSearch", "vaultRead", "vaultWrite", "codeExecution", "kubectlRead", "githubRead",
     "manageAgora", "githubWrite", "githubMerge", "terminalExec", "novaCapture",
+    "conversationRead",
   ]
     .filter((c) => caps[c])
     .map((c) => ({
       webSearch: "web", vaultRead: "vault", vaultWrite: "vault✎", codeExecution: "code",
       kubectlRead: "k8s", githubRead: "gh", manageAgora: "manage",
       githubWrite: "pr", githubMerge: "merge", terminalExec: "shell",
-      novaCapture: "capture",
+      novaCapture: "capture", conversationRead: "convo",
     }[c]));
   return `${model ? model.label : persona.model}${enabled.length ? " · " + enabled.join(", ") : ""}`;
 }
@@ -1312,7 +1316,7 @@ function openPersonaForm(persona) {
   const caps = persona?.capabilities || {
     webSearch: true, vaultRead: true, vaultWrite: false, codeExecution: false,
     kubectlRead: false, githubRead: false, manageAgora: false, githubWrite: false, githubMerge: false,
-    terminalExec: false, novaCapture: false,
+    terminalExec: false, novaCapture: false, conversationRead: false,
   };
   capWebSearch.checked = Boolean(caps.webSearch);
   capVaultRead.checked = Boolean(caps.vaultRead);
@@ -1325,6 +1329,7 @@ function openPersonaForm(persona) {
   capGithubMerge.checked = Boolean(caps.githubMerge);
   capTerminalExec.checked = Boolean(caps.terminalExec);
   capNovaCapture.checked = Boolean(caps.novaCapture);
+  capConversationRead.checked = Boolean(caps.conversationRead);
   personaFormMemory.value = persona?.sharedMemory || "";
   personaFormTemplate.checked = Boolean(persona?.isTemplate);
   personaFormPreviewText.value = "";
@@ -1403,6 +1408,7 @@ personaForm.addEventListener("submit", async (event) => {
       githubMerge: capGithubMerge.checked,
       terminalExec: capTerminalExec.checked,
       novaCapture: capNovaCapture.checked,
+      conversationRead: capConversationRead.checked,
     },
     sharedMemory: personaFormMemory.value,
     isTemplate: personaFormTemplate.checked,
