@@ -61,6 +61,8 @@ export interface Message {
     toolUseId?: string;
     output?: string;
     isError?: boolean;
+    /** Withdraw every narration step under this toolUseId — see AuditEntry. */
+    retracted?: boolean;
   };
   /** Extended-thinking chunk (2026-07-31) -- a persona's own thought-summary
    * text (Anthropic's native thinking blocks; Gemini's when includeThoughts

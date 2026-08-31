@@ -1672,6 +1672,9 @@ export function createInternalApp(deps: ServerDeps): Express {
       toolUseId: typeof body.toolUseId === "string" ? body.toolUseId : undefined,
       output: typeof body.output === "string" ? body.output : undefined,
       isError: body.isError === true ? true : undefined,
+      // A streamed passage that turned out to be the reply — the client drops
+      // every step under this id rather than showing it twice.
+      retracted: body.retracted === true ? true : undefined,
     });
     // Inline in-chat activity (2026-07-24): every capability call also
     // shows up right where it happened in the conversation, not just in
@@ -1696,7 +1699,8 @@ export function createInternalApp(deps: ServerDeps): Express {
         undefined,
         false,
         { capability: entry.capability, detail: entry.detail, before: entry.before, after: entry.after,
-          toolUseId: entry.toolUseId, output: entry.output, isError: entry.isError },
+          toolUseId: entry.toolUseId, output: entry.output, isError: entry.isError,
+          retracted: entry.retracted },
       );
     }
     res.status(201).json({ status: "recorded", entry });

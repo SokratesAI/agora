@@ -2406,7 +2406,7 @@ function renderMessages(
     empty.textContent = "No messages yet.";
     messagesEl.appendChild(empty);
   } else {
-    const visible = mergeToolResults(messages);
+    const visible = mergeTextStreams(mergeToolResults(messages));
     const last = visible[visible.length - 1];
     // Only the group at the window's front can be missing anything: everything
     // after it arrived whole.
@@ -2518,6 +2518,78 @@ function mergeToolResults(messages) {
     };
     if (index >= 0) merged[index] = withOutput;
     callsById.set(activity.toolUseId, withOutput);
+  }
+  return merged;
+}
+
+// A written passage arrives as one message when it is finished, which is why
+// a long closing paragraph still appears in one go (issues.md #4). The bridge
+// can send it as it is written instead: one message per paragraph break, each
+// carrying the whole passage so far under one stable `toolUseId`. Folding them
+// here -- last wins, in the first one's position -- shows a passage growing in
+// place in the drawer rather than the same text repeated N times.
+//
+// Each step carries the whole passage rather than a delta, on purpose. The
+// client then has no ordering or concatenation to get wrong, and a step lost
+// between two polls is repaired by the next one instead of leaving a hole.
+// Flushing at paragraph breaks is what keeps that from being expensive: a
+// long passage is a handful of steps, not one per token.
+//
+// `retracted` is the other half, and it is what makes streaming safe to turn
+// on at all. The bridge cannot know, while a passage is being written, whether
+// it is narration or the reply -- the reply is whichever passage is still
+// pending when the turn ends. So it streams every passage and retracts the
+// stream id of the one that turned out to be the reply. Without that, Edvard
+// reads his own reply twice: once growing in the drawer, once in the bubble.
+// That duplication is the exact reason two earlier cycles measured this and
+// declined to ship the bridge half alone.
+function mergeTextStreams(messages) {
+  const streams = new Map();
+  for (const message of messages) {
+    const activity = message.activity;
+    if (activity?.capability !== NARRATION_TEXT || !activity.toolUseId) continue;
+    const stream = streams.get(activity.toolUseId) ?? {
+      anchor: null,
+      latest: null,
+      retracted: false,
+    };
+    if (activity.retracted) stream.retracted = true;
+    else {
+      if (!stream.anchor) stream.anchor = message;
+      stream.latest = message;
+    }
+    streams.set(activity.toolUseId, stream);
+  }
+
+  const merged = [];
+  for (const message of messages) {
+    const activity = message.activity;
+    const id =
+      activity?.capability === NARRATION_TEXT ? activity.toolUseId : undefined;
+    if (!id) {
+      // No stream id: a passage the bridge sent whole, which is every passage
+      // written before this existed. Untouched.
+      merged.push(message);
+      continue;
+    }
+    const stream = streams.get(id);
+    // Retracted, or nothing but a retraction ever seen for this id: the reply
+    // bubble is carrying this text, so the drawer must not.
+    if (stream.retracted || !stream.latest) continue;
+    // Every later step folds into the first one's slot, so the drawer's
+    // expanded-state key stays stable while the passage grows underneath it.
+    if (message !== stream.anchor) continue;
+    merged.push(
+      stream.latest === stream.anchor
+        ? message
+        : {
+            ...stream.anchor,
+            activity: {
+              ...stream.anchor.activity,
+              detail: stream.latest.activity.detail,
+            },
+          },
+    );
   }
   return merged;
 }
