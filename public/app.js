@@ -2573,9 +2573,10 @@ function mergeTextStreams(messages) {
       continue;
     }
     const stream = streams.get(id);
-    // Retracted, or nothing but a retraction ever seen for this id: the reply
-    // bubble is carrying this text, so the drawer must not.
-    if (stream.retracted || !stream.latest) continue;
+    // The reply bubble is carrying this text, so the drawer must not. This
+    // also covers a retraction whose own stream fell outside the loaded
+    // window: a step under this id set `retracted` and none set `latest`.
+    if (stream.retracted) continue;
     // Every later step folds into the first one's slot, so the drawer's
     // expanded-state key stays stable while the passage grows underneath it.
     if (message !== stream.anchor) continue;
