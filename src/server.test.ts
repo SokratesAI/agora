@@ -1855,6 +1855,44 @@ describe("agora internal app", () => {
     });
   });
 
+  it("POST /audit carries `retracted` through to the in-chat copy (issues.md #4)", async () => {
+    // A passage is streamed while it is written, before anyone knows whether
+    // it is narration or the reply. The bridge retracts the stream id of the
+    // one that turned out to be the reply; the client drops every step under
+    // it so Edvard does not read his own reply twice.
+    const conversation = await deps.conversations.create("Streaming", "");
+    const res = await request(app).post("/audit").send({
+      personaName: "Nova",
+      conversationId: conversation.id,
+      capability: "assistant_text",
+      detail: "",
+      toolUseId: "txt_1",
+      retracted: true,
+    });
+    expect(res.status).toBe(201);
+    expect((await deps.audit.list())[0].retracted).toBe(true);
+    const reloaded = await deps.conversations.get(conversation.id);
+    expect(reloaded?.messages[0].activity).toMatchObject({
+      capability: "assistant_text",
+      toolUseId: "txt_1",
+      retracted: true,
+    });
+  });
+
+  it("POST /audit leaves `retracted` undefined on an ordinary tool call", async () => {
+    const conversation = await deps.conversations.create("Ordinary", "");
+    await request(app).post("/audit").send({
+      personaName: "Nova",
+      conversationId: conversation.id,
+      capability: "Bash",
+      detail: "echo hi",
+      toolUseId: "toolu_a",
+    });
+    expect((await deps.audit.list())[0].retracted).toBeUndefined();
+    const reloaded = await deps.conversations.get(conversation.id);
+    expect(reloaded?.messages[0].activity?.retracted).toBeUndefined();
+  });
+
   it("POST /audit without a resolvable conversationId records the entry but touches no conversation", async () => {
     const res = await request(app).post("/audit").send({
       personaName: "Gemini",

@@ -566,6 +566,120 @@ describe("narration text", () => {
   });
 });
 
+describe("mergeTextStreams (issues.md #4 — a passage as it is written)", () => {
+  const step = (text, id, extra = {}) =>
+    say("", { activity: { capability: "assistant_text", detail: text, toolUseId: id, ...extra } });
+
+  it("shows one growing passage, not one step per paragraph", () => {
+    const merged = globalThis.mergeTextStreams([
+      step("First paragraph.", "txt_1"),
+      step("First paragraph.\n\nSecond paragraph.", "txt_1"),
+      step("First paragraph.\n\nSecond paragraph.\n\nThird.", "txt_1"),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.detail).toBe(
+      "First paragraph.\n\nSecond paragraph.\n\nThird.",
+    );
+  });
+
+  it("keeps the first step's id and position, so an open drawer stays open", () => {
+    const first = step("Checking", "txt_1");
+    const merged = globalThis.mergeTextStreams([
+      say("go"),
+      first,
+      step("Checking the deploy.", "txt_1"),
+      chip("kubectl_read", "get pods"),
+      say("done"),
+    ]);
+    expect(merged.map((m) => m.text)).toEqual(["go", "", "", "done"]);
+    expect(merged[1].id).toBe(first.id);
+    expect(merged[1].activity.detail).toBe("Checking the deploy.");
+  });
+
+  it("drops a retracted stream entirely, because the reply bubble carries it", () => {
+    // The whole reason the bridge half was never shippable alone: a passage is
+    // streamed before anyone knows it is the reply, and the reply arrives
+    // again as its own message.
+    const merged = globalThis.mergeTextStreams([
+      say("go"),
+      step("So the answer", "txt_2"),
+      step("So the answer is that the pods are fine.", "txt_2"),
+      step("", "txt_2", { retracted: true }),
+      say("So the answer is that the pods are fine."),
+    ]);
+    expect(merged.map((m) => m.text)).toEqual(["go", "So the answer is that the pods are fine."]);
+  });
+
+  it("drops a retraction whose own stream fell outside the loaded window", () => {
+    const merged = globalThis.mergeTextStreams([step("", "txt_gone", { retracted: true })]);
+    expect(merged).toHaveLength(0);
+  });
+
+  it("retracts only its own stream", () => {
+    const merged = globalThis.mergeTextStreams([
+      step("kept", "txt_a"),
+      step("dropped", "txt_b"),
+      step("", "txt_b", { retracted: true }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].activity.detail).toBe("kept");
+  });
+
+  it("interleaves two streams in flight without mixing their text", () => {
+    const merged = globalThis.mergeTextStreams([
+      step("one", "txt_1"),
+      step("two", "txt_2"),
+      step("one more", "txt_1"),
+      step("two more", "txt_2"),
+    ]);
+    expect(merged.map((m) => m.activity.detail)).toEqual(["one more", "two more"]);
+  });
+
+  it("leaves a passage with no stream id exactly as it was", () => {
+    // Every passage written before this existed, and every one the bridge
+    // still sends whole.
+    const whole = say("", { activity: { capability: "assistant_text", detail: "written whole" } });
+    const merged = globalThis.mergeTextStreams([say("go"), whole, chip("vault_read", "a.md")]);
+    expect(merged).toHaveLength(3);
+    expect(merged[1]).toBe(whole);
+  });
+
+  it("does not touch a tool chip that shares the toolUseId shape", () => {
+    const merged = globalThis.mergeTextStreams([
+      call("Bash", "pytest", "toolu_a"),
+      result("Bash", "toolu_a", "97 passed"),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("renders a streamed passage in the drawer as one prose block", () => {
+    globalThis.renderMessages([
+      say("go"),
+      step("First half.", "txt_9"),
+      step("First half. Second half.", "txt_9"),
+      say("done"),
+    ]);
+    const [drawer] = drawers();
+    toggleOf(drawer).click();
+    const prose = bodyOf(drawer).querySelectorAll(".msg-narration-text");
+    expect(prose).toHaveLength(1);
+    expect(prose[0].textContent).toContain("First half. Second half.");
+  });
+
+  it("keeps a retracted passage out of the drawer as well as out of the list", () => {
+    globalThis.renderMessages([
+      say("go"),
+      step("the closing paragraph", "txt_10"),
+      step("", "txt_10", { retracted: true }),
+      say("the closing paragraph"),
+    ]);
+    // Nothing narrated survives, so there is no drawer to open at all -- the
+    // text reaches Edvard once, in the bubble.
+    expect(drawers()).toHaveLength(0);
+    expect(visibleText()).toContain("the closing paragraph");
+  });
+});
+
 describe("formatRunningFor", () => {
   // The "Run now" button used to claim "Queued — runs within ~5s." no matter
   // what. When a cycle is already in flight the press is only picked up after

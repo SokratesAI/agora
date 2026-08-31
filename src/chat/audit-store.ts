@@ -35,6 +35,12 @@ export interface AuditEntry {
   /** The tool call failed — a non-zero exit, a missing file. Rendered as a
    * failed chip rather than a normal one. */
   isError?: boolean;
+  /** This `toolUseId`'s narration is withdrawn: drop every entry under it.
+   * Only `assistant_text` uses it. A passage is streamed as it is written,
+   * before the bridge can know whether it is narration or the reply, and the
+   * one that turns out to be the reply is retracted so the drawer does not
+   * show what the reply bubble is about to say. */
+  retracted?: boolean;
 }
 
 // Single JSON array capped to the newest MAX_ENTRIES — bounded by design,
