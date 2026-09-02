@@ -2304,7 +2304,6 @@ describe("public app response compression", () => {
     expect(br.bytes).toBeLessThan(plain.bytes / 2);
     expect(br.body).toBe(plain.body);
   });
-
 });
 
 describe("conversation folders", () => {
