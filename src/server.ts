@@ -99,6 +99,7 @@ function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefi
     "vaultWrite",
     "codeExecution",
     "kubectlRead",
+    "kubectlTest",
     "githubRead",
     "manageAgora",
     "githubWrite",

@@ -14,6 +14,15 @@ export interface PersonaCapabilities {
    * (get/describe/logs/top; Secrets refused at both the tool and RBAC
    * level). Issues.md #3. */
   kubectlRead: boolean;
+  /** Full CRUD kubectl via the runner's kubectl_test tool, pinned to the
+   * `test` namespace and refused everywhere else -- at the tool as well as
+   * in the runner ServiceAccount's RBAC. Deliberately separate from
+   * kubectlRead, which is read-only over the whole cluster: this one can
+   * create/patch/delete/exec, so a persona may be trusted to look at the
+   * cluster without also being trusted to change part of it. The owner's
+   * ideas #230 asked for a scratch namespace for live coding sessions;
+   * this is the flag that hands it to a persona. Defaults off. */
+  kubectlTest: boolean;
   /** Read-only GitHub queries via the runner's github_read tool
    * (issues/PRs/runs/releases; GET-only for `gh api`). Issues.md #3. */
   githubRead: boolean;
@@ -126,6 +135,7 @@ export const DEFAULT_CAPABILITIES: PersonaCapabilities = {
   vaultWrite: false,
   codeExecution: false,
   kubectlRead: false,
+  kubectlTest: false,
   githubRead: false,
   manageAgora: false,
   githubWrite: false,

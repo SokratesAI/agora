@@ -301,6 +301,31 @@ describe("agora public app", () => {
     expect(res.body.persona.capabilities.githubRead).toBe(true);
   });
 
+  it("PATCH /personas keeps kubectlTest, which parseCapabilities used to drop", async () => {
+    // The flag has to be named in three places -- the interface, the
+    // defaults, and parseCapabilities' allowlist -- and only the third one
+    // decides what survives a request. It was missing there first, and the
+    // symptom is the worst kind: PATCH answered 200 "updated" and the read
+    // back showed the old value, so the caller is told it worked.
+    const created = await request(app).post("/personas").send({
+      name: "Scratch",
+      model: "anthropic:claude-sonnet-5",
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.persona.capabilities.kubectlTest).toBe(false);
+
+    const patched = await request(app)
+      .patch(`/personas/${created.body.persona.id}`)
+      .send({ capabilities: { kubectlTest: true } });
+    expect(patched.status).toBe(200);
+    expect(patched.body.persona.capabilities.kubectlTest).toBe(true);
+
+    const readBack = await request(app).get(`/personas/${created.body.persona.id}`);
+    expect(readBack.body.persona.capabilities.kubectlTest).toBe(true);
+    // and it is its own flag, not a synonym for the read-only one
+    expect(readBack.body.persona.capabilities.kubectlRead).toBe(false);
+  });
+
   it("POST /personas accepts the terminalExec capability flag, defaulted off", async () => {
     const off = await request(app).post("/personas").send({
       name: "NoShell",
