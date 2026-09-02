@@ -670,26 +670,21 @@ export function createPublicApp(deps: ServerDeps): Express {
     return resolved.filter((m): m is import("./chat/attachment-store.js").AttachmentMeta => m !== null);
   }
   // Compress everything above compression's 1kb default threshold. This app
-  // is JSON and static text, and nothing in front of it compresses — the
-  // Tailscale Ingress is a plain forwarder. Content negotiation picks per
-  // client: a browser offering `br` gets Brotli, a gzip-only client gets
-  // gzip, and a client that offers neither (urllib, i.e. the runner) gets
-  // the same plain bytes it always did.
+  // is JSON, and nothing in front of it compresses — the Tailscale Ingress is
+  // a plain forwarder. Content negotiation picks per client: a browser
+  // offering `br` gets Brotli, a gzip-only client gets gzip, and a client
+  // that offers neither (urllib, i.e. the runner) gets the same plain bytes
+  // it always did.
   //
   // Measured on the live pod's own payloads, 2026-08-10:
   //                        raw      gzip -6      brotli q4
   //   /conversations     103,631      6,851 →       6,031  (17.2x)
   //   ?limit=200 window  165,725     32,502 →      30,968  ( 5.4x)
-  //   public/app.js      111,985     27,537
-  //   public/index.html   58,969     12,313
-  //
-  // Must precede express.static so the frontend is compressed too.
   app.use(compression());
-  // Count every request by route template. Registered ahead of express.static
-  // on purpose: a request for `public/app.js` never reaches a route handler,
-  // and whether anything still asks for those assets is the question issue
-  // #119 turns on. `req.route` is undefined here and set by the router before
-  // `finish` fires, so the template is read in the listener, not now.
+  // Count every request by route template. `req.route` is undefined here and
+  // set by the router before `finish` fires, so the template is read in the
+  // listener, not now. A request that matches no route is still counted, by
+  // path, which is what makes this readable as "does anything call X".
   app.use((req, res, next) => {
     if (routeUsage) {
       res.on("finish", () => {
@@ -706,7 +701,6 @@ export function createPublicApp(deps: ServerDeps): Express {
     next();
   });
   app.use(express.json());
-  app.use(express.static("public"));
 
   app.get("/healthz", (_req, res) => {
     res.status(200).json({ status: "ok" });

@@ -90,6 +90,18 @@ describe("agora public app", () => {
     expect((await request(app).get("/healthz")).status).toBe(200);
   });
 
+  // The front end this app used to serve was deleted 2026-09-02 on Edvard's
+  // own capture -- "I do not use agora app anymore. Cut it." -- after
+  // `/route-usage` showed its only human caller was one Android browser.
+  // `express.static("public")` went with it, and this is what refuses to let
+  // it back in by accident: a mount would answer these instead of 404ing.
+  it.each(["/", "/index.html", "/app.js", "/cron.js", "/sw.js", "/manifest.json", "/icon.svg"])(
+    "serves no front end at %s",
+    async (path) => {
+      expect((await request(app).get(path)).status).toBe(404);
+    },
+  );
+
   describe("route usage", () => {
     it("records a matched request under its route template, not its URL", async () => {
       // Two different ids, so a store keying on the URL would show two entries.
@@ -2280,21 +2292,17 @@ describe("public app response compression", () => {
     expect(JSON.parse(plain.body).totalMessages).toBe(40);
   });
 
-  it("gives a real browser Brotli, which is the path Edvard's phone takes", async () => {
+  it("gives a browser Brotli, which is what compression negotiates first", async () => {
     // A browser offers `br` ahead of gzip and compression@1.8 honours it.
-    // This is the production path; the gzip tests above cover older clients.
+    // No browser reaches this app directly any more -- the front end it used
+    // to serve is deleted -- but Nova's site is a browser-facing proxy in
+    // front of these same payloads, so the negotiation still has to work.
     const plain = await rawGet(app, path, "identity");
     const br = await rawGet(app, path, "br, gzip, deflate");
 
     expect(br.encoding).toBe("br");
     expect(br.bytes).toBeLessThan(plain.bytes / 2);
     expect(br.body).toBe(plain.body);
-  });
-
-  it("compresses the static frontend too, not just the API", async () => {
-    const gzipped = await rawGet(app, "/app.js", "gzip");
-    expect(gzipped.status).toBe(200);
-    expect(gzipped.encoding).toBe("gzip");
   });
 });
 
