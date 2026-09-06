@@ -194,6 +194,31 @@ export const DEFAULT_ARCHIVED = false;
 export const DEFAULT_STICKY_FALLBACK = false;
 
 /**
+ * How many conversation files `list()` reads at once.
+ *
+ * The walk used to be one `await` per file in a `for` loop, so a call with a
+ * warm summary cache still cost one serialized `stat` round trip per
+ * conversation. Measured 2026-09-06 against the live server: 1,052
+ * conversation files, `GET /conversations` 1.28-1.70s and
+ * `GET /conversations?active=true` 0.31-0.57s, while `/healthz` answered in
+ * 0.01s against the same process in the same second — the time is the walk,
+ * not a blocked event loop. The file count only ever grows: this loop opens
+ * one conversation per cycle and 1,019 of the 1,052 are finished cycles.
+ *
+ * Batched rather than unbounded, and the danger is a real one. On a cold
+ * cache — every pod start, because the cache is in memory — a miss reads the
+ * whole conversation file, so `Promise.all` over the entire directory would
+ * hold every conversation in memory at once. The container's limit is 512Mi
+ * and it sits at 90Mi (measured 2026-09-06), and the peak of an unbounded
+ * walk is set by a file count that nothing here bounds and that grows by one
+ * a cycle. I have not measured the directory's bytes — the point is that the
+ * unbounded version has no ceiling to measure against. 32 turns ~1,052
+ * serialized round trips into ~33 while keeping the cold path to 32 files in
+ * flight.
+ */
+export const LIST_BATCH = 32;
+
+/**
  * One file per conversation under a dedicated subdirectory, same atomic-write
  * shape as MessageStore. Conversations are looked up by name as well as id —
  * callers (a persona's own poll loop) create-or-fetch by name so they don't
@@ -237,17 +262,29 @@ export class ConversationStore {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw err;
     }
+    const paths = entries
+      .filter((entry) => entry.endsWith(".json"))
+      .map((entry) => path.join(this.dir, entry));
     const summaries: ConversationSummary[] = [];
     const present = new Set<string>();
-    for (const entry of entries) {
-      if (!entry.endsWith(".json")) continue;
-      const filePath = path.join(this.dir, entry);
-      const summary = await this.readSummary(filePath);
-      if (!summary) continue;
-      present.add(filePath);
-      // A fresh object per call, as callers have always got — the cached
-      // one is this store's own copy and must not escape.
-      summaries.push({ ...summary });
+    // A batch at a time rather than one `await` per file: see LIST_BATCH.
+    // `Promise.all` resolves in argument order, so the list this builds is
+    // the same order the serial loop built, which the sort below relies on
+    // for conversations that share a `lastMessageAt`.
+    for (let i = 0; i < paths.length; i += LIST_BATCH) {
+      const batch = await Promise.all(
+        paths.slice(i, i + LIST_BATCH).map(async (filePath) => ({
+          filePath,
+          summary: await this.readSummary(filePath),
+        })),
+      );
+      for (const { filePath, summary } of batch) {
+        if (!summary) continue;
+        present.add(filePath);
+        // A fresh object per call, as callers have always got — the cached
+        // one is this store's own copy and must not escape.
+        summaries.push({ ...summary });
+      }
     }
     for (const cached of this.summaryCache.keys()) {
       if (!present.has(cached)) this.summaryCache.delete(cached);

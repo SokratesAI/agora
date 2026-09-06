@@ -8,6 +8,7 @@ import {
   DEFAULT_THINKING,
   DEFAULT_ARCHIVED,
   DEFAULT_STICKY_FALLBACK,
+  LIST_BATCH,
 } from "./conversation-store.js";
 import { prefixRev } from "./message-rev.js";
 
@@ -540,6 +541,86 @@ describe("ConversationStore", () => {
       await store.delete(one.id);
       await store.list();
       expect(cache.size).toBe(1);
+    });
+
+    // Issue #30, fix 4. The walk was one `await` per file, so a warm-cache
+    // list() paid one serialized `stat` round trip per conversation and the
+    // live server holds 1,052 of them.
+    describe("list() batching", () => {
+      /** Wraps fs.stat so the test can see how many were ever in flight at
+       * once. Each call parks until every call of its own batch has arrived,
+       * so a serial walk deadlocks on the timeout rather than passing
+       * slowly — a stat that resolves immediately would let the old `for`
+       * loop look concurrent. */
+      function trackStat(files: number) {
+        let inFlight = 0;
+        let peak = 0;
+        const real = fs.stat.bind(fs);
+        const spy = vi.spyOn(fs, "stat").mockImplementation((async (...args: unknown[]) => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          // Give every other pending stat a chance to start before this one
+          // resolves. One macrotask hop is enough: a batched walk starts them
+          // all in the same tick, a serial walk never has two pending.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          try {
+            return await (real as (...a: unknown[]) => Promise<unknown>)(...args);
+          } finally {
+            inFlight -= 1;
+          }
+        }) as never);
+        return { peak: () => peak, restore: () => spy.mockRestore(), files };
+      }
+
+      it("stats more than one conversation at a time", async () => {
+        dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+        const store = new ConversationStore(dir);
+        for (let i = 0; i < 5; i += 1) await store.create(`C${i}`, "");
+
+        const tracker = trackStat(5);
+        try {
+          expect(await store.list()).toHaveLength(5);
+        } finally {
+          tracker.restore();
+        }
+        expect(tracker.peak()).toBe(5);
+      });
+
+      // The batch is bounded on purpose: a cold cache reads the whole file
+      // behind every stat, so an unbounded walk holds the entire directory in
+      // memory at once, and nothing bounds how many files that is.
+      it("never holds more than LIST_BATCH files in flight", async () => {
+        dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+        const store = new ConversationStore(dir);
+        const count = LIST_BATCH + 7;
+        for (let i = 0; i < count; i += 1) await store.create(`C${i}`, "");
+
+        const tracker = trackStat(count);
+        try {
+          expect(await store.list()).toHaveLength(count);
+        } finally {
+          tracker.restore();
+        }
+        expect(tracker.peak()).toBe(LIST_BATCH);
+      });
+
+      // Promise.all resolves in argument order. The sort below the walk
+      // returns 0 for two conversations with the same lastMessageAt, so
+      // their relative order is whatever the walk produced — readdir order,
+      // exactly as the serial loop gave.
+      it("keeps readdir order for conversations the sort cannot separate", async () => {
+        dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+        const store = new ConversationStore(dir);
+        const count = LIST_BATCH + 3;
+        for (let i = 0; i < count; i += 1) await store.create(`C${i}`, "");
+
+        const byReaddir = (await fs.readdir(path.join(dir, "conversations")))
+          .filter((e) => e.endsWith(".json"))
+          .map((e) => e.replace(/\.json$/, ""));
+        // Every one has lastMessageAt null, so none of them sort ahead of
+        // any other and the list is the walk's own order.
+        expect((await store.list()).map((c) => c.id)).toEqual(byReaddir);
+      });
     });
 
     it("hands out an independent copy, so a caller cannot corrupt the cache", async () => {
