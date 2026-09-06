@@ -31,6 +31,94 @@ describe("HeartbeatStore", () => {
     expect(heartbeat.task).toBe("");
   });
 
+  it("claim writes only while lastRunAt still holds what the caller read", async () => {
+    const store = await makeStore();
+    const heartbeat = await store.create({
+      name: "hb",
+      personaId: "p1",
+      conversationId: "c1",
+      schedule: "daily@08:00",
+    });
+    // A heartbeat that has never run: null is a real value to race for, not
+    // an absence, so the first claim has to be able to win on it.
+    const first = await store.claim(
+      heartbeat.id,
+      { lastRunAt: "2026-09-06T07:00:00.000Z", lastResult: "running" },
+      null,
+    );
+    expect(first.status).toBe("claimed");
+
+    // The second poller read the same null and lost. It must not write, and
+    // it must be told what the winner left behind.
+    const second = await store.claim(
+      heartbeat.id,
+      { lastRunAt: "2026-09-06T07:00:01.000Z", lastResult: "running" },
+      null,
+    );
+    expect(second.status).toBe("conflict");
+    expect(second.status === "conflict" && second.heartbeat.lastRunAt).toBe(
+      "2026-09-06T07:00:00.000Z",
+    );
+
+    // And the loser really did not write -- checked from disk, not from the
+    // object the call returned.
+    const onDisk = await store.get(heartbeat.id);
+    expect(onDisk?.lastRunAt).toBe("2026-09-06T07:00:00.000Z");
+  });
+
+  it("claim on a matching non-null lastRunAt wins, and a stale one does not", async () => {
+    const store = await makeStore();
+    const heartbeat = await store.create({
+      name: "hb",
+      personaId: "p1",
+      conversationId: "c1",
+      schedule: "daily@08:00",
+    });
+    await store.update(heartbeat.id, { lastRunAt: "2026-09-06T07:00:00.000Z" });
+
+    const stale = await store.claim(
+      heartbeat.id,
+      { lastRunAt: "2026-09-06T08:00:00.000Z" },
+      null,
+    );
+    expect(stale.status).toBe("conflict");
+
+    const current = await store.claim(
+      heartbeat.id,
+      { lastRunAt: "2026-09-06T08:00:00.000Z" },
+      "2026-09-06T07:00:00.000Z",
+    );
+    expect(current.status).toBe("claimed");
+    expect((await store.get(heartbeat.id))?.lastRunAt).toBe("2026-09-06T08:00:00.000Z");
+  });
+
+  it("claim on a heartbeat that does not exist is not a conflict", async () => {
+    const store = await makeStore();
+    const result = await store.claim("nope", { lastResult: "running" }, null);
+    expect(result.status).toBe("not-found");
+  });
+
+  it("two concurrent claims on one heartbeat produce exactly one winner", async () => {
+    const store = await makeStore();
+    const heartbeat = await store.create({
+      name: "hb",
+      personaId: "p1",
+      conversationId: "c1",
+      schedule: "daily@08:00",
+    });
+    // Both pollers read null and fire without awaiting each other -- which is
+    // what two overlapping runner pods do, and what a plain update cannot
+    // refuse. Serialisation lives in the store's write queue, so this is the
+    // test that would fail if the compare moved outside it.
+    const [a, b] = await Promise.all([
+      store.claim(heartbeat.id, { lastRunAt: "A" }, null),
+      store.claim(heartbeat.id, { lastRunAt: "B" }, null),
+    ]);
+    const claimed = [a, b].filter((r) => r.status === "claimed");
+    expect(claimed).toHaveLength(1);
+    expect(["A", "B"]).toContain((await store.get(heartbeat.id))?.lastRunAt);
+  });
+
   it("updates run bookkeeping fields", async () => {
     const store = await makeStore();
     const heartbeat = await store.create({

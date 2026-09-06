@@ -1508,6 +1508,19 @@ export const INTERNAL_HEARTBEAT_FIELDS: Record<string, "string" | "boolean"> = {
 };
 
 /**
+ * Body keys the internal `PATCH /heartbeats/:id` accepts but never writes:
+ * preconditions. `ifLastRunAt` is the runner's compare-and-swap on the claim
+ * it makes before running a cycle -- it carries the `lastRunAt` it read, and
+ * the write only lands if the stored value still matches. Kept in its own
+ * table rather than in `INTERNAL_HEARTBEAT_FIELDS`, because that table is
+ * copied straight into the store update and a precondition is not a field of
+ * a heartbeat. It is `string | null` because a heartbeat that has never run
+ * has `lastRunAt: null`, and that is exactly the state two pollers race for
+ * on a fresh heartbeat.
+ */
+export const INTERNAL_HEARTBEAT_PRECONDITIONS = ["ifLastRunAt"] as const;
+
+/**
  * Internal app (:8081): the agent surface. Guarded by the shared
  * x-agora-token (ADR 0007) when configured — the network boundary keeps it
  * cluster-internal, the token keeps arbitrary in-cluster pods out.
@@ -1585,7 +1598,30 @@ export function createInternalApp(deps: ServerDeps): Express {
   });
 
   app.patch("/heartbeats/:id", async (req, res) => {
-    const body = req.body as Record<string, unknown>;
+    const rawBody = req.body as Record<string, unknown>;
+    // Preconditions are stripped before anything below looks at the body, so
+    // the unsupported-name check, the type check and the store update all
+    // keep seeing only fields that are actually written.
+    const hasPrecondition = Object.prototype.hasOwnProperty.call(
+      rawBody,
+      "ifLastRunAt",
+    );
+    const expectedLastRunAt = rawBody.ifLastRunAt;
+    if (
+      hasPrecondition &&
+      typeof expectedLastRunAt !== "string" &&
+      expectedLastRunAt !== null
+    ) {
+      res.status(400).json({
+        error: `ifLastRunAt must be a string or null, got ${typeof expectedLastRunAt}`,
+      });
+      return;
+    }
+    const body = Object.fromEntries(
+      Object.entries(rawBody).filter(
+        ([key]) => !(INTERNAL_HEARTBEAT_PRECONDITIONS as readonly string[]).includes(key),
+      ),
+    );
     // conversationId is otherwise a public-app-only edit (route above) --
     // allowed here too specifically for the runner's own engine bookkeeping
     // (2026-08-02, rotateConversationEachRun): it needs to point a
@@ -1647,6 +1683,30 @@ export function createInternalApp(deps: ServerDeps): Express {
     const updates = Object.fromEntries(
       Object.keys(body).map((key) => [key, body[key]]),
     ) as HeartbeatUpdate;
+    if (hasPrecondition) {
+      const result = await heartbeats.claim(
+        req.params.id,
+        updates,
+        expectedLastRunAt as string | null,
+      );
+      if (result.status === "not-found") {
+        res.status(404).json({ error: "heartbeat not found" });
+        return;
+      }
+      if (result.status === "conflict") {
+        // 409 and the current value, not a 200 -- the caller is another
+        // runner replica deciding whether to start a cycle, and "somebody
+        // beat you to it" has to be distinguishable from "your write landed".
+        res.status(409).json({
+          error: "lastRunAt has moved since you read it",
+          lastRunAt: result.heartbeat.lastRunAt,
+          heartbeat: result.heartbeat,
+        });
+        return;
+      }
+      res.status(200).json({ status: "updated", heartbeat: result.heartbeat });
+      return;
+    }
     const heartbeat = await heartbeats.update(req.params.id, updates);
     if (!heartbeat) {
       res.status(404).json({ error: "heartbeat not found" });
