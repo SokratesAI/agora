@@ -466,6 +466,16 @@ describe("agora public app", () => {
     expect(payload.personaId).toBeUndefined();
   });
 
+  it("preview sends no conversation id -- it has no conversation", async () => {
+    // The other caller of the runner's /invoke. Ask's fix must not invent a
+    // conversation for a draft persona that is not in one.
+    await request(app)
+      .post("/personas/preview")
+      .send({ personality: "draft", model: "claude-cli:claude-sonnet-5", text: "hi" });
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.conversationId).toBeUndefined();
+  });
+
   it("preview 503s without a runner and 502s when invoke fails", async () => {
     const noRunner = createPublicApp({ ...deps, invokeRunner: undefined });
     expect(
@@ -1024,6 +1034,40 @@ describe("agora public app", () => {
 
     const conversation = await deps.conversations.get(id);
     expect(conversation?.messages).toHaveLength(1); // ask persisted nothing
+  });
+
+  it("ask tells the runner which conversation it is about", async () => {
+    // The runner's `claude-cli` provider cannot call the bridge without a
+    // conversation id -- the bridge answers 400 and Ask came back 502 -- so
+    // Ask only ever worked on the metered `anthropic:` models, which need
+    // none and which production may not use. Measured live against the
+    // deployed Marcus coach, 2026-09-06.
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Asky", model: "claude-cli:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.conversationId).toBe(id);
+  });
+
+  it("ask sends the conversation id on the inline-persona branch too", async () => {
+    // A conversation whose curator persona has been removed takes the other
+    // arm of the same ternary, and it is just as much a conversation.
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Curatorless", model: "claude-cli:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    const stored = await deps.conversations.get(id);
+    await deps.conversations.update(id, { ...stored!, personas: [] });
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "q" });
+
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.personaId).toBeUndefined();
+    expect(payload.conversationId).toBe(id);
   });
 
   it("ask sends the conversation's own model, not the curator persona's", async () => {

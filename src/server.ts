@@ -49,6 +49,15 @@ export interface InvokePayload {
    * grants off the shared persona (idea #95, slice 1). Omitted when the
    * conversation has no model of its own, which falls back to the persona. */
   model?: string;
+  /** Which conversation the side question is about. Ask sends it; Preview
+   * has no conversation and omits it. The runner's `claude-cli` provider
+   * cannot call the bridge without one -- the bridge answers 400
+   * "conversation_id and prompt (or attachments) are required" -- so until
+   * 2026-09-06 Ask was a 502 on every subscription-backed persona and had
+   * only ever worked on the metered `anthropic:` models. The runner treats
+   * an /invoke turn as ephemeral, so sending this does not make Ask a turn
+   * of the conversation: it still persists nothing. */
+  conversationId?: string;
   persona?: { personality: string; model: string; thinking: boolean };
   messages: { role: "user" | "assistant"; content: string }[];
 }
@@ -1409,6 +1418,7 @@ export function createPublicApp(deps: ServerDeps): Express {
       ? {
           personaId: curator.personaId,
           ...(conversation.model ? { model: conversation.model } : {}),
+          conversationId: conversation.id,
           messages: toInvokeMessages(conversation, text),
         }
       : {
@@ -1417,6 +1427,7 @@ export function createPublicApp(deps: ServerDeps): Express {
             model: conversation.model,
             thinking: conversation.thinking,
           },
+          conversationId: conversation.id,
           messages: toInvokeMessages(conversation, text),
         };
     try {
