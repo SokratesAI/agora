@@ -162,10 +162,24 @@ function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
  * fell back to the stale inline fields, so the drawer/Studio kept showing
  * a conversation's *original* model/personality forever, even after the
  * curator persona was edited. Every other route was already correct;
- * this was the one spot the join never actually ran. */
+ * this was the one spot the join never actually ran.
+ *
+ * `includePersonality: false` is for `GET /conversations` only, and it is
+ * the first of issue #30's three fixes. The curator's personality text is
+ * copied into every element of that list, and 1,019 of the 1,052 rows
+ * share one curator: measured live 2026-09-06, the field is 1,181,402
+ * characters, 64% of the whole 1.79 MB response, and the pod was sitting
+ * at 499m of its 500m CPU limit with 78.7% of its scheduling periods
+ * throttled while `GET /conversations` took 10.1–13.0 s. No caller reads
+ * it off the list — the runner's reply path takes it from the single
+ * conversation GET (`conversations.speak`, via `detail`), and nothing in
+ * this repo or the Nova site reads a list row's `personality`. The detail
+ * routes are unchanged, so the mixed-version guarantee above still
+ * holds. */
 async function enrichConversation(
   conversation: Omit<Conversation, "messages"> & { lastMessageAt?: string | null },
   personas: PersonaStore,
+  { includePersonality = true }: { includePersonality?: boolean } = {},
 ): Promise<Record<string, unknown>> {
   let personality = conversation.personality;
   let model = conversation.model;
@@ -196,7 +210,7 @@ async function enrichConversation(
   return {
     id: conversation.id,
     name: conversation.name,
-    personality,
+    ...(includePersonality ? { personality } : {}),
     model,
     thinking,
     personas: conversation.personas ? enrichedLinks : undefined,
@@ -1213,7 +1227,9 @@ export function createPublicApp(deps: ServerDeps): Express {
   // ---- Conversations ----------------------------------------------------
   app.get("/conversations", async (_req, res) => {
     const summaries = await conversations.list();
-    const enriched = await Promise.all(summaries.map((s) => enrichConversation(s, personas)));
+    const enriched = await Promise.all(
+      summaries.map((s) => enrichConversation(s, personas, { includePersonality: false })),
+    );
     res.status(200).json({ conversations: enriched });
   });
 

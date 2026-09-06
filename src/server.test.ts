@@ -531,13 +531,44 @@ describe("agora public app", () => {
     // conversation PATCH shim — this is exactly what went stale live.
     await deps.personas.update(personaId, { model: "gemini:gemini-flash-latest", personality: "new" });
 
+    // The live personality reaches the detail route, which is where every
+    // reader of it actually looks. The list stopped carrying the field in
+    // issue #30 — see the test below — so the join is asserted here now.
+    const detail = await request(app).get(`/conversations/${created.body.conversation.id}/messages`);
+    expect(detail.body.personality).toBe("new");
+
     const list = await request(app).get("/conversations");
     const entry = list.body.conversations.find((c: { id: string }) => c.id === created.body.conversation.id);
-    expect(entry.personality).toBe("new");
-    // ...but not the model. That one is the conversation's own as of idea
-    // #95 slice 1, so editing the persona in Studio no longer repoints
-    // conversations that were already created from it.
+    // The join still runs on the list — the model proves it, and it is the
+    // same loop that used to set personality.
+    // ...but the model is not the persona's. That one is the conversation's
+    // own as of idea #95 slice 1, so editing the persona in Studio no
+    // longer repoints conversations that were already created from it.
     expect(entry.model).toBe("anthropic:claude-haiku-4-5-20251001");
+  });
+
+  it("GET /conversations omits personality; the detail route still carries it (issue #30)", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Fat", personality: "a very long curator personality", model: "anthropic:claude-haiku-4-5-20251001" });
+    const id = created.body.conversation.id;
+
+    const list = await request(app).get("/conversations");
+    const entry = list.body.conversations.find((c: { id: string }) => c.id === id);
+    // Not `toBeUndefined()` on its own: the key must be absent, not present
+    // and empty, so the bytes are actually gone from the payload.
+    expect(entry).toBeDefined();
+    expect("personality" in entry).toBe(false);
+    expect(JSON.stringify(list.body)).not.toContain("a very long curator personality");
+
+    // The runner's reply path reads it from here (`conversations.speak`),
+    // so this half must not move.
+    const detail = await request(app).get(`/conversations/${id}/messages`);
+    expect(detail.body.personality).toBe("a very long curator personality");
+
+    // Creating and updating still answer with it — Persona Studio reads
+    // the conversation it just wrote.
+    expect(created.body.conversation.personality).toBe("a very long curator personality");
   });
 
   it("a conversation with no model of its own still falls back to the curator's", async () => {
