@@ -1,5 +1,4 @@
 import express, { type Express, type RequestHandler } from "express";
-import { createHash } from "node:crypto";
 import compression from "compression";
 import multer from "multer";
 import type pino from "pino";
@@ -20,6 +19,7 @@ import type {
 // fallbacks below — which is the metered Anthropic entry, so both silently
 // billed the prepaid balance. Array position is not a default.
 import { DEFAULT_MODEL } from "./chat/conversation-store.js";
+import { prefixRev } from "./chat/message-rev.js";
 import type { PersonaStore, PersonaCapabilities, Persona } from "./chat/persona-store.js";
 import type { HeartbeatStore, HeartbeatUpdate } from "./chat/heartbeat-store.js";
 import { isValidSchedule, SCHEDULE_ERROR } from "./chat/heartbeat-store.js";
@@ -177,7 +177,7 @@ function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
  * routes are unchanged, so the mixed-version guarantee above still
  * holds. */
 async function enrichConversation(
-  conversation: Omit<Conversation, "messages"> & { lastMessageAt?: string | null },
+  conversation: Omit<Conversation, "messages"> & { lastMessageAt?: string | null; rev?: string },
   personas: PersonaStore,
   { includePersonality = true }: { includePersonality?: boolean } = {},
 ): Promise<Record<string, unknown>> {
@@ -224,34 +224,14 @@ async function enrichConversation(
     forkedFrom: conversation.forkedFrom,
     createdAt: conversation.createdAt,
     ...(conversation.lastMessageAt !== undefined ? { lastMessageAt: conversation.lastMessageAt } : {}),
+    // Only the list carries one — a summary has it, a full `Conversation`
+    // does not, and the routes that enrich a whole conversation already
+    // answer with the same fingerprint under their own `rev`. Spelled as a
+    // conditional spread rather than a plain field for that reason: an
+    // explicit `rev: undefined` on the detail routes would serialise away
+    // but would still read as "this endpoint has a rev and it is empty".
+    ...(conversation.rev !== undefined ? { rev: conversation.rev } : {}),
   };
-}
-
-/** Fingerprint of `messages[0..endIndex]` — the exact prefix a polling client
- * claims to be holding. The client never computes this; it echoes back the
- * string the server last handed it, and the server re-derives the truth. That
- * asymmetry is deliberate: it means an incremental reply is only ever sent
- * when the server itself can still see the history the client is built on,
- * and no client-side cache-invalidation call site can be forgotten.
- *
- * The three inputs are exactly the three things any mutation path touches:
- * `id` covers append and delete, `text` covers edit-and-resend, `forgotten`
- * covers the forget toggle. Hashing the full text rather than its length is
- * what catches a same-length edit of the newest message, made from a second
- * device — the one case a length would call unchanged. Measured on the
- * largest real conversation (620 messages, 790KB of text): 1.79ms per call,
- * so 3.6ms for the two an incremental request makes. That is paid only on the
- * incremental path, and it buys not serialising and compressing 800KB. */
-function prefixRev(messages: Message[], endIndex: number): string {
-  const hash = createHash("sha1");
-  for (let i = 0; i <= endIndex; i++) {
-    const message = messages[i];
-    // JSON rather than a delimiter string: its own escaping is what keeps
-    // ["a","b"] apart from ["ab"], so there is no separator to pick and no
-    // way for message text to impersonate one.
-    hash.update(JSON.stringify([message.id, message.forgotten === true, message.text]));
-  }
-  return hash.digest("hex").slice(0, 16);
 }
 
 function toInvokeMessages(

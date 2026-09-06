@@ -2,6 +2,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { prefixRev } from "./message-rev.js";
+
 /** Metadata for one uploaded file (Issues.md: "Sending files, images...
  * does not work"). Content lives in AttachmentStore, keyed by `id`; a
  * message only carries the metadata, never the bytes. */
@@ -139,6 +141,20 @@ export type ConversationSummary = Omit<Conversation, "messages"> & {
   /** Timestamp of the last message, or null if none yet — drives the
    * switcher's activity sort (Decisions/0004: no manual pin). */
   lastMessageAt: string | null;
+  /** The same fingerprint `GET /conversations/:id/messages` returns as its
+   * own `rev` — `prefixRev` over every message. Issue #30, fix 3: the runner
+   * polls this list every tick and then asks each conversation for its
+   * messages, and almost every tick nothing has changed. A `rev` here lets a
+   * caller that already holds a window compare it against the one it was
+   * handed last time and skip the per-conversation request entirely.
+   *
+   * It costs nothing in the steady state because it is computed inside
+   * `readSummary`, which only parses a conversation whose file changed —
+   * so a tick where nothing moved is still one `stat` per conversation.
+   * `lastMessageAt` cannot do this job: it does not move when an old
+   * message is edited, deleted or forgotten, and those are exactly the
+   * mutations `prefixRev` exists to catch. */
+  rev: string;
 };
 
 export interface ConversationUpdate {
@@ -534,6 +550,7 @@ export class ConversationStore {
     const summary: ConversationSummary = {
       ...rest,
       lastMessageAt: messages.length > 0 ? messages[messages.length - 1].ts : null,
+      rev: prefixRev(messages, messages.length - 1),
     };
     this.summaryCache.set(filePath, { key, summary });
     return summary;

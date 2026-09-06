@@ -9,12 +9,63 @@ import {
   DEFAULT_ARCHIVED,
   DEFAULT_STICKY_FALLBACK,
 } from "./conversation-store.js";
+import { prefixRev } from "./message-rev.js";
 
 describe("ConversationStore", () => {
   let dir: string;
 
   afterEach(async () => {
     if (dir) await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // Issue #30, fix 3: the runner polls the list every tick and then asks each
+  // conversation for its messages, and almost every tick nothing changed.
+  it("carries a rev on every summary that is the same fingerprint /messages returns", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "p");
+    await store.appendMessage(conversation.id, "Edvard", "one");
+    const full = await store.get(conversation.id);
+    const [summary] = await store.list();
+    expect(summary.rev).toBe(prefixRev(full!.messages, full!.messages.length - 1));
+    expect(summary.rev).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("moves the rev when a message is appended and holds it when nothing changes", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "p");
+    const empty = (await store.list())[0].rev;
+    await store.appendMessage(conversation.id, "Edvard", "one");
+    const afterFirst = (await store.list())[0].rev;
+    expect(afterFirst).not.toBe(empty);
+    // The skip this exists for: two list calls with no write between them
+    // must agree, or the caller re-fetches every tick and nothing is saved.
+    expect((await store.list())[0].rev).toBe(afterFirst);
+    await store.appendMessage(conversation.id, "Haiku", "two");
+    expect((await store.list())[0].rev).not.toBe(afterFirst);
+  });
+
+  // The mutation `lastMessageAt` cannot see, which is why this is a separate
+  // field rather than a comparison on the timestamp already in the summary.
+  it("moves the rev when an existing message is edited, leaving lastMessageAt alone", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+    const store = new ConversationStore(dir);
+    const conversation = await store.create("Haiku", "p");
+    const first = await store.appendMessage(conversation.id, "Edvard", "one");
+    await store.appendMessage(conversation.id, "Haiku", "two");
+    const before = (await store.list())[0];
+    const stored = await store.get(conversation.id);
+    stored!.messages[0].text = "ONE";
+    expect(stored!.messages[0].id).toBe(first!.id);
+    await fs.writeFile(
+      path.join(dir, "conversations", `${conversation.id}.json`),
+      JSON.stringify(stored),
+      "utf8",
+    );
+    const after = (await store.list())[0];
+    expect(after.lastMessageAt).toBe(before.lastMessageAt);
+    expect(after.rev).not.toBe(before.rev);
   });
 
   it("returns an empty list when nothing has been created", async () => {

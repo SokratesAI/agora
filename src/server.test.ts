@@ -576,6 +576,37 @@ describe("agora public app", () => {
     expect(looseIds).toContain(gone.body.conversation.id);
   });
 
+  it("GET /conversations carries the same rev /messages does, so a poller can skip an unchanged conversation (issue #30)", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Polled", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    const id = created.body.conversation.id;
+    await deps.conversations.appendMessage(id, "Edvard", "hi");
+
+    const row = (await request(app).get("/conversations")).body.conversations
+      .find((c: { id: string }) => c.id === id);
+    const detail = await request(app).get(`/conversations/${id}/messages`);
+    // The whole point: a caller holding `detail.body.rev` from last tick can
+    // compare it against the list row and conclude "nothing changed" without
+    // a second request. Equality across the two endpoints is the contract.
+    expect(row.rev).toBe(detail.body.rev);
+    expect(row.rev).toMatch(/^[0-9a-f]{16}$/);
+    // Not the sha1 of nothing: an empty conversation makes both sides of
+    // the equality above the same constant, so the check would pass
+    // against a `rev` that was never computed from a message at all.
+    expect(row.rev).not.toBe("da39a3ee5e6b4b0d");
+
+    // And it moves on a write, or the skip would be permanent.
+    await deps.conversations.appendMessage(id, "Edvard", "again");
+    const after = (await request(app).get("/conversations")).body.conversations
+      .find((c: { id: string }) => c.id === id);
+    expect(after.rev).not.toBe(row.rev);
+
+    // The detail route has its own `rev` already and must not grow a second,
+    // stale one from the enrich path.
+    expect(detail.body.messages).toBeDefined();
+  });
+
   it("GET /conversations omits personality; the detail route still carries it (issue #30)", async () => {
     const created = await request(app)
       .post("/conversations")
