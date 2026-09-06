@@ -547,6 +547,35 @@ describe("agora public app", () => {
     expect(entry.model).toBe("anthropic:claude-haiku-4-5-20251001");
   });
 
+  it("GET /conversations?active=true drops archived rows; the bare list still carries them (issue #30)", async () => {
+    const live = await request(app)
+      .post("/conversations")
+      .send({ name: "Live", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    const gone = await request(app)
+      .post("/conversations")
+      .send({ name: "Gone", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    await deps.conversations.update(gone.body.conversation.id, { archived: true });
+
+    const active = await request(app).get("/conversations?active=true");
+    const activeIds = active.body.conversations.map((c: { id: string }) => c.id);
+    expect(activeIds).toContain(live.body.conversation.id);
+    expect(activeIds).not.toContain(gone.body.conversation.id);
+
+    // The default is unchanged — cycle_number and conversation_rotation
+    // resolve conversations by name and tag and must still see archived
+    // ones, so this must stay opt-in.
+    const all = await request(app).get("/conversations");
+    const allIds = all.body.conversations.map((c: { id: string }) => c.id);
+    expect(allIds).toContain(gone.body.conversation.id);
+
+    // Anything that is not the literal string "true" is the default
+    // question, not a filter — a caller that sends `active=1` must not
+    // silently get a shorter list than it asked for.
+    const loose = await request(app).get("/conversations?active=1");
+    const looseIds = loose.body.conversations.map((c: { id: string }) => c.id);
+    expect(looseIds).toContain(gone.body.conversation.id);
+  });
+
   it("GET /conversations omits personality; the detail route still carries it (issue #30)", async () => {
     const created = await request(app)
       .post("/conversations")

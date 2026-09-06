@@ -1225,10 +1225,24 @@ export function createPublicApp(deps: ServerDeps): Express {
   });
 
   // ---- Conversations ----------------------------------------------------
-  app.get("/conversations", async (_req, res) => {
+  // ?active=true — issue #30's second fix. The store holds 1,052
+  // conversations and 999 of them are archived; measured live 2026-09-06,
+  // all rows serialise to 1,836,578 bytes and the 53 active ones to 94,105.
+  // The poll that asks 8,000 times a day drops every archived row on the
+  // next line (`conversations.poll_conversation` skips on the flag), and
+  // asked for all of them only because it could not ask for less.
+  //
+  // Opt-in, and deliberately so: `?active=true` is a different question
+  // from "everything", and callers that resolve a conversation by name or
+  // tag — cycle_number, conversation_rotation — must still see archived
+  // rows. Anything that does not pass it gets exactly the bytes it always
+  // did.
+  app.get("/conversations", async (req, res) => {
+    const activeOnly = req.query.active === "true";
     const summaries = await conversations.list();
+    const rows = activeOnly ? summaries.filter((s) => !s.archived) : summaries;
     const enriched = await Promise.all(
-      summaries.map((s) => enrichConversation(s, personas, { includePersonality: false })),
+      rows.map((s) => enrichConversation(s, personas, { includePersonality: false })),
     );
     res.status(200).json({ conversations: enriched });
   });
