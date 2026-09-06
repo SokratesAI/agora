@@ -56,6 +56,17 @@ export interface Heartbeat {
   createdAt: string;
 }
 
+/**
+ * What `HeartbeatStore.claim` answers with. Three outcomes rather than
+ * `Heartbeat | null`, because "the heartbeat is gone" and "somebody else
+ * claimed this run" are different answers and the caller maps them to
+ * different HTTP statuses.
+ */
+export type HeartbeatClaimResult =
+  | { status: "claimed"; heartbeat: Heartbeat }
+  | { status: "conflict"; heartbeat: Heartbeat }
+  | { status: "not-found" };
+
 export interface HeartbeatUpdate {
   name?: string;
   personaId?: string;
@@ -259,6 +270,41 @@ export class HeartbeatStore {
       Object.assign(heartbeat, updates);
       await this.writeFile(heartbeat);
       return heartbeat;
+    });
+  }
+
+  /**
+   * `update`, but only if `lastRunAt` still holds the value the caller read.
+   *
+   * The runner claims a due heartbeat by PATCHing `lastRunAt` before it runs
+   * anything, so a restart cannot start the same cycle twice. That claim is a
+   * plain write: two pollers that both read `lastRunAt = T` both write, both
+   * get a 200, and both run the cycle. Today exactly one poller exists
+   * because agora-persona-runner deploys with `Recreate` and a 48-minute
+   * termination grace -- the replacement pod is not created until the running
+   * cycle exits, which is precisely the outage issue #130 is about. Moving it
+   * to `RollingUpdate` overlaps two pollers on purpose, so the claim has to
+   * be able to refuse the loser first.
+   *
+   * The comparison and the write happen inside one `enqueue` step, which is
+   * the same serialisation `update` already relies on, so no interleaving is
+   * possible within a process. A conflict returns the heartbeat as it stands
+   * so the caller can log who won rather than guessing.
+   */
+  async claim(
+    id: string,
+    updates: HeartbeatUpdate,
+    expectedLastRunAt: string | null,
+  ): Promise<HeartbeatClaimResult> {
+    return this.enqueue(async () => {
+      const heartbeat = await this.get(id);
+      if (!heartbeat) return { status: "not-found" as const };
+      if ((heartbeat.lastRunAt ?? null) !== expectedLastRunAt) {
+        return { status: "conflict" as const, heartbeat };
+      }
+      Object.assign(heartbeat, updates);
+      await this.writeFile(heartbeat);
+      return { status: "claimed" as const, heartbeat };
     });
   }
 

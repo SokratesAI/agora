@@ -1926,6 +1926,81 @@ describe("agora internal app", () => {
     expect(reloaded?.forceRun).toBe(true);
   });
 
+  it("PATCH /heartbeats/:id (internal) with ifLastRunAt refuses the second claimer with 409", async () => {
+    // Two runner pods overlap the moment the Deployment moves off Recreate
+    // (issue #130). Both read lastRunAt, both PATCH; without the
+    // precondition both get a 200 and both run the same cycle.
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const first = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ ifLastRunAt: null, lastRunAt: "2026-09-06T07:00:00.000Z", lastResult: "running" });
+    expect(first.status).toBe(200);
+
+    const second = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ ifLastRunAt: null, lastRunAt: "2026-09-06T07:00:01.000Z", lastResult: "running" });
+    expect(second.status).toBe(409);
+    expect(second.body.lastRunAt).toBe("2026-09-06T07:00:00.000Z");
+
+    const reloaded = await deps.heartbeats.get(heartbeat.id);
+    expect(reloaded?.lastRunAt).toBe("2026-09-06T07:00:00.000Z");
+  });
+
+  it("PATCH /heartbeats/:id (internal) with a matching ifLastRunAt writes as normal", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    await deps.heartbeats.update(heartbeat.id, { lastRunAt: "2026-09-06T07:00:00.000Z" });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ ifLastRunAt: "2026-09-06T07:00:00.000Z", forceRun: false, lastResult: "running" });
+    expect(res.status).toBe(200);
+    expect(res.body.heartbeat.lastResult).toBe("running");
+    expect((await deps.heartbeats.get(heartbeat.id))?.lastResult).toBe("running");
+  });
+
+  it("ifLastRunAt is a precondition, not a field -- it is never written and never refused as unsupported", async () => {
+    // It is deliberately absent from INTERNAL_HEARTBEAT_FIELDS, so the
+    // unsupported-name 400 must not catch it and the store must not receive
+    // it as an update.
+    expect(Object.keys(INTERNAL_HEARTBEAT_FIELDS)).not.toContain("ifLastRunAt");
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ ifLastRunAt: null, lastResult: "running" });
+    expect(res.status).toBe(200);
+    const reloaded = await deps.heartbeats.get(heartbeat.id) as unknown as Record<string, unknown>;
+    expect(reloaded).not.toHaveProperty("ifLastRunAt");
+  });
+
+  it("PATCH /heartbeats/:id (internal) refuses an ifLastRunAt that is not a string or null", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ ifLastRunAt: 5, lastResult: "running" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("ifLastRunAt must be a string or null");
+    expect((await deps.heartbeats.get(heartbeat.id))?.lastResult ?? null).toBeNull();
+  });
+
+  it("a PATCH with no ifLastRunAt still overwrites, so nothing else on this route changed", async () => {
+    const heartbeat = await deps.heartbeats.create({
+      name: "hb", personaId: "p", conversationId: "c", schedule: "every@6h",
+    });
+    await deps.heartbeats.update(heartbeat.id, { lastRunAt: "2026-09-06T07:00:00.000Z" });
+    const res = await request(app)
+      .patch(`/heartbeats/${heartbeat.id}`)
+      .send({ lastRunAt: "2026-09-06T09:00:00.000Z" });
+    expect(res.status).toBe(200);
+    expect((await deps.heartbeats.get(heartbeat.id))?.lastRunAt).toBe("2026-09-06T09:00:00.000Z");
+  });
+
   it("POST /audit records entries", async () => {
     const res = await request(app).post("/audit").send({
       personaName: "Marcus",
