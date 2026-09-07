@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { storePath, UnsafeStoreIdError } from "./store-path.js";
 import { randomUUID } from "node:crypto";
 
 /** A heartbeat is a trigger config bound to one conversation
@@ -196,8 +197,8 @@ export class HeartbeatStore {
     this.dir = path.join(dataDir, "heartbeats");
   }
 
-  private filePath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+  private filePath(id: string): string | null {
+    return storePath(this.dir, id, ".json");
   }
 
   async list(): Promise<Heartbeat[]> {
@@ -219,7 +220,8 @@ export class HeartbeatStore {
   }
 
   async get(id: string): Promise<Heartbeat | null> {
-    return this.readFile(this.filePath(id));
+    const filePath = this.filePath(id);
+    return filePath === null ? null : this.readFile(filePath);
   }
 
   async create(fields: {
@@ -311,7 +313,9 @@ export class HeartbeatStore {
   async delete(id: string): Promise<boolean> {
     return this.enqueue(async () => {
       try {
-        await fs.unlink(this.filePath(id));
+        const filePath = this.filePath(id);
+        if (filePath === null) return false;
+        await fs.unlink(filePath);
         return true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -346,6 +350,7 @@ export class HeartbeatStore {
   private async writeFile(heartbeat: Heartbeat): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const target = this.filePath(heartbeat.id);
+    if (target === null) throw new UnsafeStoreIdError(heartbeat.id);
     const tmpPath = `${target}.${randomUUID()}.tmp`;
     const handle = await fs.open(tmpPath, "w", 0o600);
     try {

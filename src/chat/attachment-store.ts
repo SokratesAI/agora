@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { storePath, UnsafeStoreIdError } from "./store-path.js";
 import { randomUUID } from "node:crypto";
 
 export interface AttachmentMeta {
@@ -27,13 +28,16 @@ export class AttachmentStore {
     this.dir = path.join(dataDir, "attachments");
   }
 
-  private entryDir(id: string): string {
-    return path.join(this.dir, id);
+  private entryDir(id: string): string | null {
+    return storePath(this.dir, id);
   }
 
   async save(filename: string, mimeType: string, content: Buffer): Promise<AttachmentMeta> {
     const id = randomUUID();
     const dir = this.entryDir(id);
+    // Unreachable: `id` is the randomUUID() two lines up. Asserted rather than
+    // assumed, because a silent no-op here would lose an upload.
+    if (dir === null) throw new UnsafeStoreIdError(id);
     await fs.mkdir(dir, { recursive: true });
     const meta: AttachmentMeta = { id, filename, mimeType, size: content.length };
     await fs.writeFile(path.join(dir, "meta.json"), JSON.stringify(meta));
@@ -43,7 +47,9 @@ export class AttachmentStore {
 
   async getMeta(id: string): Promise<AttachmentMeta | null> {
     try {
-      const raw = await fs.readFile(path.join(this.entryDir(id), "meta.json"), "utf8");
+      const dir = this.entryDir(id);
+      if (dir === null) return null;
+      const raw = await fs.readFile(path.join(dir, "meta.json"), "utf8");
       return JSON.parse(raw) as AttachmentMeta;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -53,7 +59,9 @@ export class AttachmentStore {
 
   async getContent(id: string): Promise<Buffer | null> {
     try {
-      return await fs.readFile(path.join(this.entryDir(id), "content"));
+      const dir = this.entryDir(id);
+      if (dir === null) return null;
+      return await fs.readFile(path.join(dir, "content"));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;

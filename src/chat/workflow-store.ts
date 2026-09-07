@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { storePath, UnsafeStoreIdError } from "./store-path.js";
 import { randomUUID } from "node:crypto";
 
 /** One step of a Workflow (Decisions/0009). Executed by the runner as
@@ -93,8 +94,8 @@ export class WorkflowStore {
     this.dir = path.join(dataDir, "workflows");
   }
 
-  private filePath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+  private filePath(id: string): string | null {
+    return storePath(this.dir, id, ".json");
   }
 
   async list(): Promise<Workflow[]> {
@@ -116,7 +117,8 @@ export class WorkflowStore {
   }
 
   async get(id: string): Promise<Workflow | null> {
-    return this.readFile(this.filePath(id));
+    const filePath = this.filePath(id);
+    return filePath === null ? null : this.readFile(filePath);
   }
 
   async create(fields: { name: string; description?: string; steps?: Step[] }): Promise<Workflow> {
@@ -147,7 +149,9 @@ export class WorkflowStore {
   async delete(id: string): Promise<boolean> {
     return this.enqueue(async () => {
       try {
-        await fs.unlink(this.filePath(id));
+        const filePath = this.filePath(id);
+        if (filePath === null) return false;
+        await fs.unlink(filePath);
         return true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -178,6 +182,7 @@ export class WorkflowStore {
   private async writeFile(workflow: Workflow): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const target = this.filePath(workflow.id);
+    if (target === null) throw new UnsafeStoreIdError(workflow.id);
     const tmpPath = `${target}.${randomUUID()}.tmp`;
     const handle = await fs.open(tmpPath, "w", 0o600);
     try {
