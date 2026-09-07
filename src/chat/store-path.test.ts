@@ -11,13 +11,13 @@ describe("storePath", () => {
   const dir = "/data/personas";
 
   it("joins an ordinary id, with and without a suffix", () => {
-    expect(storePath(dir, "abc-123")).toBe(path.join(dir, "abc-123"));
-    expect(storePath(dir, "abc-123", ".json")).toBe(path.join(dir, "abc-123.json"));
+    expect(storePath(dir, "abc-123")).toBe(path.resolve(dir, "abc-123"));
+    expect(storePath(dir, "abc-123", ".json")).toBe(path.resolve(dir, "abc-123.json"));
   });
 
   it("takes a real randomUUID, which is every id these stores mint", () => {
     expect(storePath(dir, "3f2504e0-4f89-11d3-9a0c-0305e82c3301", ".json")).toBe(
-      path.join(dir, "3f2504e0-4f89-11d3-9a0c-0305e82c3301.json"),
+      path.resolve(dir, "3f2504e0-4f89-11d3-9a0c-0305e82c3301.json"),
     );
   });
 

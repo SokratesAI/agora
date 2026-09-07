@@ -31,7 +31,7 @@ export class UnsafeStoreIdError extends Error {
 }
 
 /**
- * `dir/<id><suffix>` when `id` is a single ordinary path segment, and **null**
+ * The resolved `dir/<id><suffix>` when `id` is a single ordinary path segment, and **null**
  * when it is not: an empty id, `.`, `..`, or anything carrying a character
  * outside `SAFE_ID`, which includes both separators, so a percent-decoded
  * `..%2fetc` never reaches `path.join`.
@@ -52,12 +52,16 @@ export function storePath(dir: string, id: string, suffix = ""): string | null {
   if (typeof id !== "string" || !SAFE_ID.test(id) || id === "." || id === "..") {
     return null;
   }
-  const joined = path.join(dir, `${id}${suffix}`);
-  // Belt and braces. SAFE_ID already excludes every separator, so this cannot
-  // fire today; it is here so that widening the character class later cannot
-  // silently reopen the hole this module was written to close.
-  if (path.dirname(path.resolve(joined)) !== path.resolve(dir)) {
+  const base = path.resolve(dir);
+  const resolved = path.resolve(path.normalize(path.join(base, `${id}${suffix}`)));
+  // Belt and braces, in the containment form rather than a second look at the
+  // id. SAFE_ID already excludes every separator, so this cannot fire today; it
+  // is here so that widening the character class later cannot silently reopen
+  // the hole this module was written to close. The trailing separator matters:
+  // without it `/data/personas-backup` passes a prefix test against
+  // `/data/personas`.
+  if (!resolved.startsWith(base + path.sep) || path.dirname(resolved) !== base) {
     return null;
   }
-  return joined;
+  return resolved;
 }
