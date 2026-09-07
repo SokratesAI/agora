@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { storePath, UnsafeStoreIdError } from "./store-path.js";
 import { randomUUID } from "node:crypto";
 
 import { prefixRev } from "./message-rev.js";
@@ -250,8 +251,8 @@ export class ConversationStore {
     this.dir = path.join(dataDir, "conversations");
   }
 
-  private filePath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+  private filePath(id: string): string | null {
+    return storePath(this.dir, id, ".json");
   }
 
   async list(): Promise<ConversationSummary[]> {
@@ -323,7 +324,8 @@ export class ConversationStore {
   }
 
   async get(id: string): Promise<Conversation | null> {
-    return this.readFile(this.filePath(id));
+    const filePath = this.filePath(id);
+    return filePath === null ? null : this.readFile(filePath);
   }
 
   async findByName(name: string): Promise<Conversation | null> {
@@ -529,7 +531,9 @@ export class ConversationStore {
 
   private async deleteConversationWith(id: string): Promise<boolean> {
     try {
-      await fs.unlink(this.filePath(id));
+      const filePath = this.filePath(id);
+      if (filePath === null) return false;
+      await fs.unlink(filePath);
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -627,6 +631,7 @@ export class ConversationStore {
   private async writeFile(conversation: Conversation): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const target = this.filePath(conversation.id);
+    if (target === null) throw new UnsafeStoreIdError(conversation.id);
     const tmpPath = `${target}.${randomUUID()}.tmp`;
     const handle = await fs.open(tmpPath, "w", 0o600);
     try {

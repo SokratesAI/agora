@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { storePath, UnsafeStoreIdError } from "./store-path.js";
 import { randomUUID } from "node:crypto";
 
 /** Capability grants (Decisions/0002 + 0007) — enforced by the runner
@@ -155,8 +156,8 @@ export class PersonaStore {
     this.dir = path.join(dataDir, "personas");
   }
 
-  private filePath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+  private filePath(id: string): string | null {
+    return storePath(this.dir, id, ".json");
   }
 
   async list(): Promise<Persona[]> {
@@ -178,7 +179,8 @@ export class PersonaStore {
   }
 
   async get(id: string): Promise<Persona | null> {
-    return this.readFile(this.filePath(id));
+    const filePath = this.filePath(id);
+    return filePath === null ? null : this.readFile(filePath);
   }
 
   async findByName(name: string): Promise<Persona | null> {
@@ -251,7 +253,9 @@ export class PersonaStore {
   async delete(id: string): Promise<boolean> {
     return this.enqueue(async () => {
       try {
-        await fs.unlink(this.filePath(id));
+        const filePath = this.filePath(id);
+        if (filePath === null) return false;
+        await fs.unlink(filePath);
         return true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -283,6 +287,7 @@ export class PersonaStore {
   private async writeFile(persona: Persona): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const target = this.filePath(persona.id);
+    if (target === null) throw new UnsafeStoreIdError(persona.id);
     const tmpPath = `${target}.${randomUUID()}.tmp`;
     const handle = await fs.open(tmpPath, "w", 0o600);
     try {
