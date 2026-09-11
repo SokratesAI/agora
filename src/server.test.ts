@@ -2216,6 +2216,38 @@ describe("agora internal app", () => {
   // spamming a phone notification per sentence.
   // -------------------------------------------------------------------------
 
+  it("POST /conversations/:id/notify on a muted conversation records the message but skips the push", async () => {
+    // Nova's Settings drawer, 2026-09-11. Muting withholds the buzz only;
+    // the reply is still there when he opens the thread.
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Noisy", "");
+    const patched = await request(app)
+      .patch(`/conversations/${conversation.id}`)
+      .send({ tags: ["nova:mute"] });
+    expect(patched.status).toBe(200);
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "an answer", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("recorded");
+    expect(res.body.muted).toBe(true);
+    expect(res.body.message.text).toBe("an answer");
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("POST /conversations/:id/notify pushes again once the mute tag is gone", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Was noisy", "");
+    await request(app).patch(`/conversations/${conversation.id}`).send({ tags: ["nova:mute"] });
+    await request(app).patch(`/conversations/${conversation.id}`).send({ tags: [] });
+    const res = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "an answer", sender: "Nova" });
+    expect(res.status).toBe(200);
+    expect(res.body.muted).toBeUndefined();
+    expect(deps.webPush.sendNotification).toHaveBeenCalled();
+  });
+
   it("POST /conversations/:id/notify with push:false records the message but skips the push", async () => {
     await deps.store.save(validSubscription);
     const conversation = await deps.conversations.create("Stream", "");
