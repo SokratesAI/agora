@@ -1833,6 +1833,19 @@ export function createInternalApp(deps: ServerDeps): Express {
       return;
     }
 
+    // Muted from Nova's Settings drawer (2026-09-11): *"Mute this
+    // conversation"*, for threads that buzz him about things he does not need
+    // to see. Same shape as push:false one branch up -- the message is still
+    // recorded and still renders; only the phone buzz is withheld. The flag
+    // is a tag rather than a new column because tags are what PATCH already
+    // accepts and what the listing already returns, so Nova can set and read
+    // it with no migration here.
+    if (Array.isArray(conversation.tags) && conversation.tags.includes("nova:mute")) {
+      logger.info({ conversationId: conversation.id, sender: speaker }, "conversation muted — push withheld");
+      res.status(200).json({ status: "recorded", muted: true, message });
+      return;
+    }
+
     // He is looking at this conversation in another app right now, so the
     // reply is already on his screen and a buzz is noise — the same rule the
     // service worker applies to a visible Agora tab, extended to the clients
