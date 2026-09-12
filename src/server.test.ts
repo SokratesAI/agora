@@ -2352,6 +2352,63 @@ describe("agora internal app", () => {
   });
 
   // -------------------------------------------------------------------------
+  // ---- POST /push: a notification about something that is not a thread ----
+
+  it("POST /push sends a bare notification with the url the tap should open", async () => {
+    await deps.store.save(validSubscription);
+    const res = await request(app)
+      .post("/push")
+      .send({ title: "Nova", body: "answered your comment", url: "/cycle/1446" });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("sent");
+    expect(deps.webPush.sendNotification).toHaveBeenCalledWith(
+      validSubscription,
+      JSON.stringify({ title: "Nova", body: "answered your comment", url: "/cycle/1446" }),
+    );
+  });
+
+  it("POST /push appends no message anywhere", async () => {
+    // The whole reason this route exists: the thing it notifies about is not
+    // in a conversation, so inventing one to hang the push on would put a
+    // message in his chat list for every journal reply.
+    await deps.store.save(validSubscription);
+    const before = await deps.conversations.list();
+    await request(app).post("/push").send({ body: "answered your comment" });
+    expect((await deps.conversations.list()).length).toBe(before.length);
+  });
+
+  it("POST /push omits url entirely when none is given", async () => {
+    // An absent url is what an older service worker falls back to `/` on; a
+    // literal `"url": null` in the payload would be a value it has to reject
+    // rather than a key it can miss.
+    await deps.store.save(validSubscription);
+    await request(app).post("/push").send({ body: "answered your comment" });
+    expect(deps.webPush.sendNotification).toHaveBeenCalledWith(
+      validSubscription,
+      JSON.stringify({ title: "Nova", body: "answered your comment" }),
+    );
+  });
+
+  it("POST /push refuses an empty body and pushes nothing", async () => {
+    await deps.store.save(validSubscription);
+    expect((await request(app).post("/push").send({ title: "Nova" })).status).toBe(400);
+    expect((await request(app).post("/push").send({ body: "" })).status).toBe(400);
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("POST /push answers 404 when nothing has subscribed yet", async () => {
+    expect((await request(app).post("/push").send({ body: "hi" })).status).toBe(404);
+    expect(deps.webPush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("does not mount /push on the public app", async () => {
+    // Same boundary as /notify one describe up: the sender is the runner and
+    // the site, both of which hold the agent token, so this is not a route
+    // his browser can reach.
+    expect((await request(createPublicApp(deps)).post("/push").send({ body: "hi" })).status)
+      .toBe(404);
+  });
+
   // 2026-08-08: quiet hours. Nova's cycle went from 4 a day to 20, which is
   // ~7 replies between 22:00 and 08:00. The reply must still be written and
   // still land in the conversation -- only the phone buzz is withheld.
