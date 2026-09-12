@@ -1932,5 +1932,60 @@ export function createInternalApp(deps: ServerDeps): Express {
     }
   });
 
+  // A push that is not about a conversation.
+  //
+  // Both senders above append a message first and push second, because
+  // everything Nova has notified him about so far lives in a thread. A reply to
+  // a comment on a journal card does not: it is stored in the vault, rendered
+  // on the card, and until now the only way to learn it had arrived was to open
+  // the app and look. That is the half of `ideas.md` #182 the chat-bubble dot
+  // did not cover -- *"I'm not able to read all the 'waiting on you' and all
+  // the answers for the journals."*
+  //
+  // `url` is the path the tap lands on, and a path on Nova's own origin is the
+  // one thing `conversationId` cannot express. Nova's service worker prefers it
+  // and falls back to `/` when it is absent, so an older worker still shows the
+  // banner and only loses the destination.
+  //
+  // No watcher check and no mute check, deliberately. `watchers` is keyed by
+  // conversation id and there is no conversation here; and "is he already
+  // looking at it" is answered better one layer out -- Nova's worker shows no
+  // banner while a Nova tab is visible, which is exactly the case where he is
+  // on the card the reply just landed on. Quiet hours still apply, because that
+  // is about the clock rather than about attention.
+  app.post("/push", async (req, res) => {
+    const { title, body, url } = req.body as {
+      title?: unknown; body?: unknown; url?: unknown;
+    };
+    if (typeof body !== "string" || body.length === 0) {
+      res.status(400).json({ error: "body is required" });
+      return;
+    }
+    const heading = typeof title === "string" && title.length > 0 ? title : "Nova";
+
+    if (isQuiet(config.quietHours, config.quietHoursTimeZone)) {
+      logger.info({ sender: heading }, "quiet hours — push withheld");
+      res.status(200).json({ status: "withheld", quietHours: true });
+      return;
+    }
+
+    const subscription = await store.load();
+    if (!subscription) {
+      res.status(404).json({ error: "no subscription registered yet" });
+      return;
+    }
+    const payload: Record<string, string> = { title: heading, body };
+    if (typeof url === "string" && url.length > 0) payload.url = url;
+    try {
+      await webPush.sendNotification(subscription, JSON.stringify(payload));
+      notificationsSent.add(1, { persona: heading });
+      res.status(200).json({ status: "sent" });
+    } catch (err) {
+      notificationsFailed.add(1, { persona: heading });
+      logger.error({ err }, "push send failed");
+      res.status(502).json({ error: "push send failed" });
+    }
+  });
+
   return app;
 }
