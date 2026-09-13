@@ -45,6 +45,24 @@ describe("MODEL_CATALOG", () => {
     }
   });
 
+  it("keeps Fable 5.1 off the metered provider", () => {
+    // Added 2026-09-13 with the `claude-cli:claude-fable-5-1` entry. The
+    // asymmetry is deliberate and the test above ("offers every anthropic
+    // model through the CLI as well") cannot catch it being undone,
+    // because that one only checks the CLI side is a superset — adding an
+    // `anthropic:claude-fable-5-1` twin would pass it.
+    //
+    // Fable 5.1 measured 2.5x Opus 5's cost on an identical prompt, and
+    // the reason it is in the catalog at all is Edvard's question about
+    // multi-HOUR runs. A metered twin of the most expensive model, on the
+    // longest-running shape of work, against a prepaid balance he has
+    // said he will not refill, is the exact thing his 2026-08-10 rule
+    // forbids. Read models.ts before deleting this.
+    const ids = MODEL_CATALOG.map((m) => m.id);
+    expect(ids).toContain("claude-cli:claude-fable-5-1");
+    expect(ids).not.toContain("anthropic:claude-fable-5-1");
+  });
+
   it("defaults new conversations to a model that is not metered", () => {
     // This is the one that actually had teeth: DEFAULT_MODEL used to be
     // `anthropic:claude-haiku-4-5-20251001`, so any conversation created
