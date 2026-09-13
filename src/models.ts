@@ -187,4 +187,42 @@ export const MODEL_CATALOG: ModelOption[] = [
     supportsThinking: false,
     contextWindow: "1M",
   },
+  // Fable 5.1, the successor to the entry above. Added 2026-09-13 on
+  // Edvard's capture asking whether a larger model is worth buying for
+  // long-horizon project work: the catalog only offered Fable 5, so the
+  // question could not be tried at all through Agora. `claude --model
+  // claude-fable-5-1` answers on the subscription (verified live
+  // 2026-09-13), so this is only a catalog entry.
+  //
+  // CLI-only on purpose, unlike Fable 5, which also has an `anthropic:`
+  // twin above. The raw-API entries are metered against a prepaid balance
+  // Edvard will not refill, and the thing this model is wanted for is a
+  // multi-hour run — the one shape that must never be able to reach the
+  // meter. The "offers every anthropic model through the CLI as well"
+  // test is a superset check, so CLI-only passes it.
+  //
+  // What it costs, measured 2026-09-13 against Opus 5 on one identical
+  // prompt, cold `--print` session both times, a single-shot build of a
+  // ~310-line module plus its own unittest suite: Fable 5.1 $2.01 / 297s
+  // / 28,314 output tokens against Opus 5 $0.80 / 360s / 29,035 -- so
+  // 2.5x the cost and 1.2x FASTER, which is the opposite of the Fable 5
+  // reading above on both axes. Quality came out level: both passed all
+  // eight properties of an independent judge (2,000 head inserts, 2,000
+  // tail, 500 into one gap, 1,000 random, both error paths, rebalance),
+  // both wrote a green suite of their own, and both shared the same
+  // defect of letting keys grow to ~400 characters.
+  //
+  // So on a bounded single-shot task there is no measured quality gain
+  // to pay 2.5x for. That is NOT a verdict on what Edvard asked about --
+  // a multi-hour agentic run with tools -- which nothing here has
+  // measured, and which the 45-minute CLI_TIMEOUT_SECONDS in the bridge
+  // currently forbids anyway. See nova/resources/research/
+  // fable-51-vs-opus-5-2026-09-13.md.
+  {
+    id: "claude-cli:claude-fable-5-1",
+    label: "Claude Fable 5.1 (CLI)",
+    provider: "claude-cli",
+    supportsThinking: false,
+    contextWindow: "1M",
+  },
 ];
