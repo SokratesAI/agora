@@ -160,6 +160,36 @@ function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
   return { steps };
 }
 
+/** A request-scoped memo for `personas.get`, so enriching a whole list
+ * reads each persona file once instead of once per conversation that
+ * links it. Measured against the live store 2026-09-14: the 1,615
+ * conversations carry 1,615 persona links resolving to **13 distinct
+ * personas**, 1,586 of them to Nova's own — so `GET /conversations` was
+ * doing 1,615 uncached `readFile` + `JSON.parse` to recover 13 answers.
+ * `PersonaStore.get` has no cache of its own and deliberately keeps none:
+ * one that outlives a request would have to be invalidated by every write
+ * path. This map does not outlive the request, so it cannot go stale in a
+ * way a caller could observe. */
+type PersonaMemo = Map<string, Promise<Persona | null>>;
+
+function resolvePersona(
+  personas: PersonaStore,
+  id: string,
+  memo: PersonaMemo | undefined,
+): Promise<Persona | null> {
+  if (!memo) return personas.get(id);
+  // The in-flight promise is what gets memoed, not the resolved persona.
+  // `Promise.all` below starts every row synchronously, so all 1,615 reach
+  // this line before the first `readFile` settles — a memo of resolved
+  // values would be empty at every one of those lookups and would save
+  // nothing at all while looking exactly like a cache.
+  const inFlight = memo.get(id);
+  if (inFlight) return inFlight;
+  const pending = personas.get(id);
+  memo.set(id, pending);
+  return pending;
+}
+
 /** Joined view (Architecture §2): the curator persona's live fields ride
  * along top-level so the previous runner — which reads
  * detail.personality/model/thinking — keeps working unchanged against
@@ -188,14 +218,17 @@ function parseSteps(body: unknown): { steps: Step[] } | { error: string } {
 async function enrichConversation(
   conversation: Omit<Conversation, "messages"> & { lastMessageAt?: string | null; rev?: string },
   personas: PersonaStore,
-  { includePersonality = true }: { includePersonality?: boolean } = {},
+  {
+    includePersonality = true,
+    personaMemo,
+  }: { includePersonality?: boolean; personaMemo?: PersonaMemo } = {},
 ): Promise<Record<string, unknown>> {
   let personality = conversation.personality;
   let model = conversation.model;
   let thinking = conversation.thinking;
   const enrichedLinks: Record<string, unknown>[] = [];
   for (const link of conversation.personas ?? []) {
-    const persona = await personas.get(link.personaId);
+    const persona = await resolvePersona(personas, link.personaId, personaMemo);
     if (!persona) continue;
     enrichedLinks.push({
       personaId: link.personaId,
@@ -1230,8 +1263,9 @@ export function createPublicApp(deps: ServerDeps): Express {
     const activeOnly = req.query.active === "true";
     const summaries = await conversations.list();
     const rows = activeOnly ? summaries.filter((s) => !s.archived) : summaries;
+    const personaMemo: PersonaMemo = new Map();
     const enriched = await Promise.all(
-      rows.map((s) => enrichConversation(s, personas, { includePersonality: false })),
+      rows.map((s) => enrichConversation(s, personas, { includePersonality: false, personaMemo })),
     );
     res.status(200).json({ conversations: enriched });
   });
