@@ -586,6 +586,57 @@ describe("agora public app", () => {
     expect(looseIds).toContain(gone.body.conversation.id);
   });
 
+  it("GET /conversations reads each persona file once, not once per conversation that links it", async () => {
+    // Live shape, measured 2026-09-14: 1,615 conversations, 1,615 persona
+    // links, 13 distinct personas — 1,586 of them Nova's own. The list route
+    // was doing one uncached readFile + JSON.parse per link.
+    const first = await request(app)
+      .post("/conversations")
+      .send({ name: "Shared A", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    const personaId = first.body.conversation.personas[0].personaId;
+    for (const name of ["Shared B", "Shared C", "Shared D"]) {
+      const extra = await request(app)
+        .post("/conversations")
+        .send({ name, personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+      await deps.conversations.update(extra.body.conversation.id, {
+        personas: [{ personaId, role: "curator" }],
+      });
+    }
+
+    const getSpy = vi.spyOn(deps.personas, "get");
+    const list = await request(app).get("/conversations");
+    expect(list.status).toBe(200);
+    const forShared = getSpy.mock.calls.filter((call) => call[0] === personaId);
+    expect(forShared).toHaveLength(1);
+
+    // And the join still happened on every row — a memo that resolved to
+    // nothing would also pass the count assertion above.
+    const linked = list.body.conversations.filter(
+      (c: { personas?: { personaId: string; name: string }[] }) =>
+        (c.personas ?? []).some((l) => l.personaId === personaId && l.name === "Shared A"),
+    );
+    expect(linked).toHaveLength(4);
+    getSpy.mockRestore();
+  });
+
+  it("the persona memo is request-scoped, so an edit between two lists is visible on the second", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Rescoped", personality: "p", model: "anthropic:claude-haiku-4-5-20251001" });
+    const id = created.body.conversation.id;
+    const personaId = created.body.conversation.personas[0].personaId;
+
+    const before = (await request(app).get("/conversations")).body.conversations
+      .find((c: { id: string }) => c.id === id);
+    expect(before.personas[0].name).toBe("Rescoped");
+
+    await deps.personas.update(personaId, { name: "Renamed" });
+
+    const after = (await request(app).get("/conversations")).body.conversations
+      .find((c: { id: string }) => c.id === id);
+    expect(after.personas[0].name).toBe("Renamed");
+  });
+
   it("GET /conversations carries the same rev /messages does, so a poller can skip an unchanged conversation (issue #30)", async () => {
     const created = await request(app)
       .post("/conversations")
