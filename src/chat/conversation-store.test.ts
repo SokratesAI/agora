@@ -51,7 +51,9 @@ describe("ConversationStore", () => {
   // field rather than a comparison on the timestamp already in the summary.
   it("moves the rev when an existing message is edited, leaving lastMessageAt alone", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
-    const store = new ConversationStore(dir);
+    // The edit below is made behind the store's back, so the list snapshot
+    // window is turned off to let the next list() walk the directory.
+    const store = new ConversationStore(dir, { listRevalidateMs: 0 });
     const conversation = await store.create("Haiku", "p");
     const first = await store.appendMessage(conversation.id, "Edvard", "one");
     await store.appendMessage(conversation.id, "Haiku", "two");
@@ -481,7 +483,7 @@ describe("ConversationStore", () => {
 
     it("picks up a conversation file edited behind the store's back", async () => {
       dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
-      const store = new ConversationStore(dir);
+      const store = new ConversationStore(dir, { listRevalidateMs: 0 });
       const conversation = await store.create("One", "");
       await store.list();
 
@@ -494,6 +496,59 @@ describe("ConversationStore", () => {
       const summaries = await store.list();
       expect(summaries[0].name).toBe("Renamed externally");
       expect(summaries[0].lastMessageAt).toBe("2026-02-02T00:00:00.000Z");
+    });
+
+    it("answers from its last walk inside the window, without a stat", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      await store.create("One", "");
+      const first = await store.list();
+      const spy = vi.spyOn(fs, "stat");
+      try {
+        const second = await store.list();
+        expect(spy).not.toHaveBeenCalled();
+        expect(second).toEqual(first);
+        // A copy each time, so a caller cannot edit the snapshot.
+        second[0].name = "mutated by a caller";
+        expect((await store.list())[0].name).toBe("One");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("shows a message written through the store at once, inside the window", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const conversation = await store.create("One", "");
+      expect((await store.list())[0].lastMessageAt).toBeNull();
+      await store.appendMessage(conversation.id, "Edvard", "hi");
+      expect((await store.list())[0].lastMessageAt).not.toBeNull();
+      await store.update(conversation.id, { name: "Renamed" });
+      expect((await store.list())[0].name).toBe("Renamed");
+    });
+
+    it("drops a conversation deleted through the store at once, inside the window", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const conversation = await store.create("One", "");
+      await store.create("Two", "");
+      expect(await store.list()).toHaveLength(2);
+      await store.delete(conversation.id);
+      expect((await store.list()).map((c) => c.name)).toEqual(["Two"]);
+    });
+
+    it("sees an edit made behind its back once the window has passed", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir, { listRevalidateMs: 50 });
+      const conversation = await store.create("One", "");
+      await store.list();
+      const filePath = path.join(dir, "conversations", `${conversation.id}.json`);
+      const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+      raw.name = "Renamed externally";
+      await fs.writeFile(filePath, JSON.stringify(raw, null, 2));
+      expect((await store.list())[0].name).toBe("One");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect((await store.list())[0].name).toBe("Renamed externally");
     });
 
     it("drops a deleted conversation from the list", async () => {
