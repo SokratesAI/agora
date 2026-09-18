@@ -537,6 +537,42 @@ describe("ConversationStore", () => {
       expect((await store.list()).map((c) => c.name)).toEqual(["Two"]);
     });
 
+    it("does not keep a walk that a write overtook as the snapshot", async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
+      const store = new ConversationStore(dir);
+      const conversation = await store.create("One", "");
+      // Cache One's summary, then drop the snapshot with a second create,
+      // so the next walk answers One from its summary cache.
+      await store.list();
+      const two = await store.create("Two", "");
+      // Hold the walk on Two's file only. One has already been answered
+      // from the summary cache by the time the write below lands, so the
+      // walk carries One's pre-write summary when it finishes -- which is
+      // the stale result that must not become the snapshot.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const realStat = fs.stat.bind(fs);
+      let held!: () => void;
+      const twoHeld = new Promise<void>((resolve) => { held = resolve; });
+      const spy = vi.spyOn(fs, "stat").mockImplementation((async (...args: Parameters<typeof fs.stat>) => {
+        const result = await realStat(...args);
+        if (String(args[0]).includes(two.id)) {
+          held();
+          await gate;
+        }
+        return result;
+      }) as typeof fs.stat);
+      const walking = store.list();
+      await twoHeld;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      spy.mockRestore();
+      await store.appendMessage(conversation.id, "Edvard", "hi");
+      release();
+      const one = (rows: Awaited<ReturnType<typeof store.list>>) => rows.find((c) => c.id === conversation.id);
+      expect(one(await walking)?.lastMessageAt).toBeNull();
+      expect(one(await store.list())?.lastMessageAt).not.toBeNull();
+    });
+
     it("sees an edit made behind its back once the window has passed", async () => {
       dir = await fs.mkdtemp(path.join(os.tmpdir(), "agora-conversations-test-"));
       const store = new ConversationStore(dir, { listRevalidateMs: 50 });
