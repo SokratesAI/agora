@@ -225,6 +225,25 @@ export const DEFAULT_STICKY_FALLBACK = false;
 export const LIST_BATCH = 32;
 
 /**
+ * How long `list()` may answer from its last walk without re-checking the
+ * directory, in milliseconds.
+ *
+ * Even with every summary cached, a walk is one `stat` per conversation
+ * file, and that count only grows: 1,880 files on 2026-09-18 against 1,052
+ * on 09-06, to return 53 that are not archived. `GET
+ * /conversations?active=true` took 0.25-0.57s that evening, almost all of
+ * it the walk, and the runner polls that route every few seconds while the
+ * Nova sidebar waits on it (his issue #141).
+ *
+ * A write through this store invalidates the snapshot at once (see
+ * `invalidateList`), so a new message is never hidden by it -- that is
+ * what the runner's poll depends on. The window only bounds how long a
+ * file changed by something *other* than this store (a restore, a hand
+ * edit) can go unseen, which before this was not at all.
+ */
+export const LIST_REVALIDATE_MS = 30_000;
+
+/**
  * One file per conversation under a dedicated subdirectory, same atomic-write
  * shape as MessageStore. Conversations are looked up by name as well as id —
  * callers (a persona's own poll loop) create-or-fetch by name so they don't
@@ -251,9 +270,21 @@ export class ConversationStore {
    * also drops the entry directly, so a write through this store is exact
    * regardless of the filesystem's mtime granularity. */
   private readonly summaryCache = new Map<string, { key: string; summary: ConversationSummary }>();
+  /** The last walk's result, reused for `LIST_REVALIDATE_MS`. */
+  private listSnapshot: { at: number; summaries: ConversationSummary[] } | null = null;
+  /** Bumped by every write, so a walk that a write overtook does not
+   * store what it read as the snapshot. */
+  private listGeneration = 0;
+  private readonly listRevalidateMs: number;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, options: { listRevalidateMs?: number } = {}) {
     this.dir = path.join(dataDir, "conversations");
+    this.listRevalidateMs = options.listRevalidateMs ?? LIST_REVALIDATE_MS;
+  }
+
+  private invalidateList(): void {
+    this.listGeneration += 1;
+    this.listSnapshot = null;
   }
 
   private filePath(id: string): string | null {
@@ -261,6 +292,19 @@ export class ConversationStore {
   }
 
   async list(): Promise<ConversationSummary[]> {
+    const snapshot = this.listSnapshot;
+    if (snapshot && Date.now() - snapshot.at < this.listRevalidateMs) {
+      return snapshot.summaries.map((summary) => ({ ...summary }));
+    }
+    const generation = this.listGeneration;
+    const summaries = await this.walk();
+    if (generation === this.listGeneration) {
+      this.listSnapshot = { at: Date.now(), summaries: summaries.map((summary) => ({ ...summary })) };
+    }
+    return summaries;
+  }
+
+  private async walk(): Promise<ConversationSummary[]> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.dir);
@@ -541,6 +585,7 @@ export class ConversationStore {
       const filePath = this.filePath(id);
       if (filePath === null) return false;
       await fs.unlink(filePath);
+      this.invalidateList();
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -649,5 +694,6 @@ export class ConversationStore {
     }
     await fs.rename(tmpPath, target);
     this.summaryCache.delete(target);
+    this.invalidateList();
   }
 }
