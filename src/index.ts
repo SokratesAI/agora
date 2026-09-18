@@ -40,7 +40,7 @@ if (!config.agentToken) {
   logger.warn("AGORA_AGENT_TOKEN not set — internal app is unguarded (ADR 0007)");
 }
 if (!config.runnerUrl) {
-  logger.warn("RUNNER_URL not set — /ask and /personas/preview will return 503");
+  logger.warn("RUNNER_URL not set — /ask will return 503");
 }
 
 const invokeRunner = config.runnerUrl

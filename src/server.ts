@@ -85,7 +85,7 @@ export interface ServerDeps {
   routeUsage?: RouteUsageStore;
   webPush: WebPushSender;
   logger: pino.Logger;
-  /** undefined → ask/preview return 503 (RUNNER_URL not configured). */
+  /** undefined → ask returns 503 (RUNNER_URL not configured). */
   invokeRunner?: (payload: InvokePayload) => Promise<string>;
 }
 
@@ -829,73 +829,6 @@ export function createPublicApp(deps: ServerDeps): Express {
 
   // ---- Legacy Main shims (ADR 0008) — kept for any old caller; the new
   // frontend talks to /conversations/* exclusively. -----------------------
-  app.get("/messages", async (_req, res) => {
-    const main = await conversations.findByName("Main");
-    res.status(200).json({ messages: main?.messages ?? [] });
-  });
-
-  app.post("/reply", async (req, res) => {
-    const { text, model } = req.body as { text?: unknown; model?: unknown };
-    if (typeof text !== "string" || text.length === 0) {
-      res.status(400).json({ error: "text is required" });
-      return;
-    }
-    if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
-      res.status(400).json({ error: "unknown model" });
-      return;
-    }
-    const main = await resolveMain(deps);
-    const message = await conversations.appendMessage(
-      main.id,
-      "Edvard",
-      text,
-      typeof model === "string" ? model : undefined,
-    );
-    repliesReceived.add(1);
-    res.status(200).json({ status: "received", message });
-  });
-
-  app.delete("/messages/:messageId", async (req, res) => {
-    const main = await conversations.findByName("Main");
-    const deleted = main
-      ? await conversations.deleteMessage(main.id, req.params.messageId)
-      : false;
-    if (!deleted) {
-      res.status(404).json({ error: "message not found" });
-      return;
-    }
-    res.status(200).json({ status: "deleted" });
-  });
-
-  app.patch("/messages/:messageId", async (req, res) => {
-    const { text } = req.body as { text?: unknown };
-    if (typeof text !== "string" || text.length === 0) {
-      res.status(400).json({ error: "text is required" });
-      return;
-    }
-    const main = await conversations.findByName("Main");
-    const message = main
-      ? await conversations.editMessage(main.id, req.params.messageId, text)
-      : null;
-    if (!message) {
-      res.status(404).json({ error: "message not found" });
-      return;
-    }
-    res.status(200).json({ status: "updated", message });
-  });
-
-  // Search covers conversations only — the legacy MessageStore's content
-  // was imported into the Main conversation by the migration; searching
-  // both would double-report every historical Main hit.
-  app.get("/search", async (req, res) => {
-    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-    if (!q) {
-      res.status(200).json({ results: [] });
-      return;
-    }
-    res.status(200).json({ results: await conversations.search(q) });
-  });
-
   registerCreateConversationRoute(app, deps);
   registerUpdateConversationRoute(app, deps);
   registerFolderRoutes(app, deps);
@@ -969,52 +902,6 @@ export function createPublicApp(deps: ServerDeps): Express {
       return;
     }
     res.status(200).json({ status: "deleted" });
-  });
-
-  app.post("/personas/:id/clone", async (req, res) => {
-    const { name } = req.body as { name?: unknown };
-    const persona = await personas.clone(
-      req.params.id,
-      typeof name === "string" && name.length > 0 ? name : undefined,
-    );
-    if (!persona) {
-      res.status(404).json({ error: "persona not found" });
-      return;
-    }
-    res.status(201).json({ status: "created", persona });
-  });
-
-  // Preview a draft persona (Decisions/0005) — inline fields, nothing
-  // saved, and the runner runs inline-persona invokes tool-less by design
-  // (critique #9: a draft with vaultWrite must not be able to write).
-  app.post("/personas/preview", async (req, res) => {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.text !== "string" || body.text.length === 0) {
-      res.status(400).json({ error: "text is required" });
-      return;
-    }
-    if (typeof body.model !== "string" || !VALID_MODEL_IDS.has(body.model)) {
-      res.status(400).json({ error: "unknown model" });
-      return;
-    }
-    if (!deps.invokeRunner) {
-      res.status(503).json({ error: "runner not configured" });
-      return;
-    }
-    try {
-      const reply = await deps.invokeRunner({
-        persona: {
-          personality: typeof body.personality === "string" ? body.personality : "",
-          model: body.model,
-          thinking: typeof body.thinking === "boolean" ? body.thinking : false,
-        },
-        messages: [{ role: "user", content: body.text }],
-      });
-      res.status(200).json({ reply });
-    } catch (err) {
-      logger.error({ err }, "preview invoke failed");
-      res.status(502).json({ error: "runner invoke failed" });
-    }
   });
 
   // ---- Heartbeats -------------------------------------------------------

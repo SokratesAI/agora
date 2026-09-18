@@ -8,7 +8,7 @@ export interface Config {
   vapidPrivateKey: string | undefined;
   vapidSubject: string;
   /** Base URL of agora-persona-runner's sync /invoke server (Decisions/0005).
-   * Unset → /ask and /personas/preview return 503 rather than hanging. */
+   * Unset → /ask returns 503 rather than hanging. */
   runnerUrl: string | undefined;
   /** Shared agent token (ADR 0007). Unset → internal app stays open (logged
    * as a warning at startup) so a missing secret can't wedge a deploy. */

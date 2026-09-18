@@ -166,23 +166,6 @@ describe("agora public app", () => {
     expect((await request(app).post("/notify").send({ text: "hi" })).status).toBe(404);
   });
 
-  // ---- Legacy Main shims (ADR 0008) ------------------------------------
-  it("POST /reply lazily creates a Main conversation with an Agora persona", async () => {
-    const res = await request(app).post("/reply").send({ text: "hello" });
-    expect(res.status).toBe(200);
-    const main = await deps.conversations.findByName("Main");
-    expect(main).not.toBeNull();
-    expect(main?.messages).toMatchObject([{ sender: "Edvard", text: "hello" }]);
-    expect(main?.personas?.[0].role).toBe("curator");
-    const persona = await deps.personas.get(main!.personas![0].personaId);
-    expect(persona?.name).toBe("Agora");
-    // 2026-08-10: this bootstrap used to spell its default `MODEL_CATALOG[0].id`,
-    // which is the metered Anthropic entry — so on a fresh install Edvard's own
-    // assistant was created billing the prepaid balance. Asserting the name
-    // alone passed either way.
-    expect(MODEL_CATALOG.find((m) => m.id === persona?.model)?.metered).toBeUndefined();
-  });
-
   it("creates an inline persona on a non-metered model when none is given", async () => {
     // The other MODEL_CATALOG[0] fallback: POST /conversations with inline
     // persona fields and no `model`.
@@ -205,24 +188,6 @@ describe("agora public app", () => {
     const chosen = MODEL_CATALOG.find((m) => m.id === res.body.defaultModel);
     expect(chosen).toBeDefined();
     expect(chosen?.metered).toBeUndefined();
-  });
-
-  it("GET /messages serves the Main conversation's thread", async () => {
-    await request(app).post("/reply").send({ text: "first" });
-    await request(app).post("/reply").send({ text: "second" });
-    const res = await request(app).get("/messages");
-    expect(res.body.messages.map((m: { text: string }) => m.text)).toEqual(["first", "second"]);
-  });
-
-  it("DELETE and PATCH /messages/:id operate on the Main conversation", async () => {
-    const sent = await request(app).post("/reply").send({ text: "typo" });
-    const edited = await request(app)
-      .patch(`/messages/${sent.body.message.id}`)
-      .send({ text: "fixed" });
-    expect(edited.body.message.text).toBe("fixed");
-    const deleted = await request(app).delete(`/messages/${sent.body.message.id}`);
-    expect(deleted.status).toBe(200);
-    expect((await deps.conversations.findByName("Main"))?.messages).toEqual([]);
   });
 
   // ---- Personas ---------------------------------------------------------
@@ -437,63 +402,6 @@ describe("agora public app", () => {
       .post("/personas")
       .send({ name: "Lone", model: "anthropic:claude-sonnet-5" });
     expect((await request(app).delete(`/personas/${lone.body.persona.id}`)).status).toBe(200);
-  });
-
-  it("POST /personas/:id/clone copies fields, never as template", async () => {
-    const created = await request(app)
-      .post("/personas")
-      .send({ name: "T", model: "anthropic:claude-sonnet-5", isTemplate: true });
-    const clone = await request(app)
-      .post(`/personas/${created.body.persona.id}/clone`)
-      .send({ name: "T-live" });
-    expect(clone.status).toBe(201);
-    expect(clone.body.persona.name).toBe("T-live");
-    expect(clone.body.persona.isTemplate).toBe(false);
-  });
-
-  it("POST /personas/preview invokes the runner with inline persona, tool-less contract", async () => {
-    const res = await request(app)
-      .post("/personas/preview")
-      .send({ personality: "draft", model: "anthropic:claude-sonnet-5", text: "hi" });
-    expect(res.status).toBe(200);
-    expect(res.body.reply).toBe("mock reply");
-    const payload = deps.invokeMock.mock.calls[0][0] as InvokePayload;
-    expect(payload.persona).toEqual({
-      personality: "draft",
-      model: "anthropic:claude-sonnet-5",
-      thinking: false,
-    });
-    expect(payload.personaId).toBeUndefined();
-  });
-
-  it("preview sends no conversation id -- it has no conversation", async () => {
-    // The other caller of the runner's /invoke. Ask's fix must not invent a
-    // conversation for a draft persona that is not in one.
-    await request(app)
-      .post("/personas/preview")
-      .send({ personality: "draft", model: "claude-cli:claude-sonnet-5", text: "hi" });
-    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
-    expect(payload.conversationId).toBeUndefined();
-  });
-
-  it("preview 503s without a runner and 502s when invoke fails", async () => {
-    const noRunner = createPublicApp({ ...deps, invokeRunner: undefined });
-    expect(
-      (
-        await request(noRunner)
-          .post("/personas/preview")
-          .send({ model: "anthropic:claude-sonnet-5", text: "hi" })
-      ).status,
-    ).toBe(503);
-
-    deps.invokeMock.mockRejectedValueOnce(new Error("boom"));
-    expect(
-      (
-        await request(app)
-          .post("/personas/preview")
-          .send({ model: "anthropic:claude-sonnet-5", text: "hi" })
-      ).status,
-    ).toBe(502);
   });
 
   // ---- Conversations with personas --------------------------------------
@@ -1721,21 +1629,7 @@ describe("agora public app", () => {
     expect(patched.body.heartbeat.conversationRetention).toBe(5);
   });
 
-  // ---- Search / audit ---------------------------------------------------
-  it("GET /search covers conversations without double-reporting Main", async () => {
-    await request(app).post("/reply").send({ text: "needle in main" });
-    const created = await request(app)
-      .post("/conversations")
-      .send({ name: "Other", model: "anthropic:claude-sonnet-5" });
-    await request(app)
-      .post(`/conversations/${created.body.conversation.id}/reply`)
-      .send({ text: "needle elsewhere" });
-    const res = await request(app).get("/search").query({ q: "needle" });
-    expect(res.body.results).toHaveLength(2);
-    const names = res.body.results.map((r: { conversationName: string }) => r.conversationName);
-    expect(names.sort()).toEqual(["Main", "Other"]);
-  });
-
+  // ---- Audit ---------------------------------------------------
   it("GET /audit returns recorded entries newest first", async () => {
     await deps.audit.append({
       personaName: "Marcus",
@@ -1854,6 +1748,22 @@ describe("agora internal app", () => {
   beforeEach(async () => {
     deps = await makeDeps();
     app = createInternalApp(deps);
+  });
+
+  it("POST /notify lazily creates a Main conversation with a non-metered Agora persona", async () => {
+    await deps.store.save(validSubscription);
+    const res = await request(app).post("/notify").send({ text: "hello" });
+    expect(res.status).toBe(200);
+    const main = await deps.conversations.findByName("Main");
+    expect(main?.messages).toMatchObject([{ sender: "Agora", text: "hello" }]);
+    expect(main?.personas?.[0].role).toBe("curator");
+    const persona = await deps.personas.get(main!.personas![0].personaId);
+    expect(persona?.name).toBe("Agora");
+    // 2026-08-10: this bootstrap used to spell its default `MODEL_CATALOG[0].id`,
+    // which is the metered Anthropic entry — so on a fresh install Edvard's own
+    // assistant was created billing the prepaid balance. It moved here from the
+    // deleted POST /reply shim, since /notify is the one caller left.
+    expect(MODEL_CATALOG.find((m) => m.id === persona?.model)?.metered).toBeUndefined();
   });
 
   it("does not mount public routes at all", async () => {
