@@ -74,6 +74,11 @@ export interface Message {
    * rendered distinctly (dimmed/collapsible) rather than as a normal reply
    * bubble. */
   thinking?: boolean;
+  /** A question with answers he can tap (idea #164). The Nova app draws one
+   * button per entry under the bubble, and a tap sends that label back as an
+   * ordinary message from him, so a typed answer works just as well. Set only
+   * through `/conversations/:id/notify`, which checks the shape. */
+  options?: string[];
 }
 
 /** Exactly one persona per conversation, always the "curator".
@@ -460,6 +465,7 @@ export class ConversationStore {
     system?: boolean,
     activity?: Message["activity"],
     thinking?: boolean,
+    options?: string[],
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -471,6 +477,7 @@ export class ConversationStore {
       ...(system ? { system: true } : {}),
       ...(activity ? { activity } : {}),
       ...(thinking ? { thinking: true } : {}),
+      ...(options && options.length > 0 ? { options } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));
     this.writeQueue = write.catch(() => undefined);
