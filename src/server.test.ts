@@ -2243,6 +2243,31 @@ describe("agora internal app", () => {
     expect(normal.body.message.system).toBeUndefined();
   });
 
+  it("POST /conversations/:id/notify stores tappable options, and refuses a malformed list", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Test", "");
+    const asked = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "Which one?", sender: "Nova", options: ["Yes", "No"], push: false });
+    expect(asked.status).toBe(200);
+    expect(asked.body.message.options).toEqual(["Yes", "No"]);
+    const stored = await deps.conversations.get(conversation.id);
+    expect(stored?.messages.at(-1)?.options).toEqual(["Yes", "No"]);
+
+    const plain = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "no question here", sender: "Nova", push: false });
+    expect(plain.body.message.options).toBeUndefined();
+
+    for (const options of [["only one"], "Yes", ["a", "a"], ["a", ""], ["a", "two\nlines"], ["a", "x".repeat(81)], [1, 2]]) {
+      const refused = await request(app)
+        .post(`/conversations/${conversation.id}/notify`)
+        .send({ text: "Which one?", sender: "Nova", options, push: false });
+      expect(refused.status, JSON.stringify(options)).toBe(400);
+    }
+    expect((await deps.conversations.get(conversation.id))?.messages).toHaveLength(2);
+  });
+
   it("legacy POST /notify lands in the Main conversation with a push (ADR 0008)", async () => {
     await deps.store.save(validSubscription);
     const res = await request(app).post("/notify").send({ persona: "Marcus", text: "yo" });

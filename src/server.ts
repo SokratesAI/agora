@@ -98,6 +98,25 @@ function isValidSubscription(body: unknown): body is PushSubscriptionRecord {
   return typeof keys.p256dh === "string" && typeof keys.auth === "string";
 }
 
+/** The tappable answers on a question (idea #164): 2-6 labels, each one line
+ * of at most 80 characters, no repeats. Each one becomes a button on his
+ * phone and its text is what a tap sends back, so a blank or duplicate label
+ * would give him a button that answers nothing he can tell apart. Returns
+ * the error to send, or null when the field is absent or well formed. */
+export function checkMessageOptions(options: unknown): string | null {
+  if (options === undefined) return null;
+  if (!Array.isArray(options) || options.length < 2 || options.length > 6) {
+    return "options must be a list of 2 to 6 answers";
+  }
+  for (const option of options) {
+    if (typeof option !== "string" || option.trim().length === 0 || option.length > 80 || /[\r\n]/.test(option)) {
+      return "each option must be one line of 1 to 80 characters";
+    }
+  }
+  if (new Set(options).size !== options.length) return "options must not repeat";
+  return null;
+}
+
 function parseCapabilities(body: unknown): Partial<PersonaCapabilities> | undefined {
   if (typeof body !== "object" || body === null) return undefined;
   const b = body as Record<string, unknown>;
@@ -1835,11 +1854,17 @@ export function createInternalApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/notify", async (req, res) => {
-    const { text, sender, system, push, thinking } = req.body as {
+    const { text, sender, system, push, thinking, options } = req.body as {
       text?: unknown; sender?: unknown; system?: unknown; push?: unknown; thinking?: unknown;
+      options?: unknown;
     };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const optionsError = checkMessageOptions(options);
+    if (optionsError) {
+      res.status(400).json({ error: optionsError });
       return;
     }
     const conversation = await conversations.get(req.params.id);
@@ -1854,6 +1879,7 @@ export function createInternalApp(deps: ServerDeps): Express {
       typeof sender === "string" && sender.length > 0 ? sender : conversation.name;
     const message = await conversations.appendMessage(
       conversation.id, speaker, text, undefined, undefined, system === true, undefined, thinking === true,
+      options as string[] | undefined,
     );
 
     // Live streaming (2026-07-24): a single persona turn now lands as
