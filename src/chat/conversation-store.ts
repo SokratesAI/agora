@@ -74,6 +74,13 @@ export interface Message {
    * rendered distinctly (dimmed/collapsible) rather than as a normal reply
    * bubble. */
   thinking?: boolean;
+  /** Context an app hands the model on the owner's behalf (issue #286) --
+   * a memory it was asked for, a briefing, what a thread is about. The model
+   * reads it as input and it starts a turn, the same as a message from him,
+   * but its `sender` stays the app that wrote it, so it is never shown or
+   * read as something Edvard said. Set only through
+   * `/conversations/:id/notify`. */
+  context?: boolean;
   /** A question with answers he can tap (idea #164). The Nova app draws one
    * button per entry under the bubble, and a tap sends that label back as an
    * ordinary message from him, so a typed answer works just as well. Set only
@@ -510,6 +517,7 @@ export class ConversationStore {
     activity?: Message["activity"],
     thinking?: boolean,
     options?: string[],
+    context?: boolean,
   ): Promise<Message | null> {
     const message: Message = {
       id: randomUUID(),
@@ -521,6 +529,7 @@ export class ConversationStore {
       ...(system ? { system: true } : {}),
       ...(activity ? { activity } : {}),
       ...(thinking ? { thinking: true } : {}),
+      ...(context ? { context: true } : {}),
       ...(options && options.length > 0 ? { options } : {}),
     };
     const write = this.writeQueue.then(() => this.appendWith(id, message));

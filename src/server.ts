@@ -302,9 +302,10 @@ function toInvokeMessages(
   const result: InvokePayload["messages"] = [];
   for (const message of conversation.messages.slice(-30)) {
     if (message.forgotten || message.system || message.activity) continue;
-    const role = message.sender === "Edvard" ? "user" : "assistant";
-    const content =
-      role === "assistant" && (conversation.personas?.length ?? 0) > 1
+    const role = message.sender === "Edvard" || message.context ? "user" : "assistant";
+    const content = message.context
+      ? `[context from ${message.sender}, not from Edvard]: ${message.text}`
+      : role === "assistant" && (conversation.personas?.length ?? 0) > 1
         ? `[${message.sender}]: ${message.text}`
         : message.text;
     result.push({ role, content });
@@ -1741,9 +1742,9 @@ export function createInternalApp(deps: ServerDeps): Express {
   });
 
   app.post("/conversations/:id/notify", async (req, res) => {
-    const { text, sender, system, push, thinking, options } = req.body as {
+    const { text, sender, system, push, thinking, options, context } = req.body as {
       text?: unknown; sender?: unknown; system?: unknown; push?: unknown; thinking?: unknown;
-      options?: unknown;
+      options?: unknown; context?: unknown;
     };
     if (typeof text !== "string" || text.length === 0) {
       res.status(400).json({ error: "text is required" });
@@ -1764,9 +1765,15 @@ export function createInternalApp(deps: ServerDeps): Express {
     // conversation name, exactly the old behavior.
     const speaker =
       typeof sender === "string" && sender.length > 0 ? sender : conversation.name;
+    // Context is input for the model, so it cannot also be a line the model
+    // is told to ignore or the model's own scratch space.
+    if (context === true && (system === true || thinking === true)) {
+      res.status(400).json({ error: "a context message cannot also be system or thinking" });
+      return;
+    }
     const message = await conversations.appendMessage(
       conversation.id, speaker, text, undefined, undefined, system === true, undefined, thinking === true,
-      options as string[] | undefined,
+      options as string[] | undefined, context === true,
     );
 
     // Live streaming (2026-07-24): a single persona turn now lands as
