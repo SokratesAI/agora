@@ -995,6 +995,25 @@ describe("agora public app", () => {
     expect(conversation?.messages).toHaveLength(1); // ask persisted nothing
   });
 
+  it("ask reads a context message as input from its app, never as Edvard (issue #286)", async () => {
+    const created = await request(app)
+      .post("/conversations")
+      .send({ name: "Ctx", model: "anthropic:claude-sonnet-5" });
+    const id = created.body.conversation.id;
+    await deps.conversations.appendMessage(
+      id, "Lyceum", "Memory: rides a Garmin Edge 530", undefined, undefined,
+      false, undefined, false, undefined, true,
+    );
+
+    await request(app).post(`/conversations/${id}/ask`).send({ text: "which computer?" });
+
+    const payload = deps.invokeMock.mock.calls.at(-1)![0] as InvokePayload;
+    expect(payload.messages).toEqual([
+      { role: "user", content: "[context from Lyceum, not from Edvard]: Memory: rides a Garmin Edge 530" },
+      { role: "user", content: "which computer?" },
+    ]);
+  });
+
   it("ask tells the runner which conversation it is about", async () => {
     // The runner's `claude-cli` provider cannot call the bridge without a
     // conversation id -- the bridge answers 400 and Ask came back 502 -- so
@@ -2497,6 +2516,27 @@ describe("agora internal app", () => {
       .post(`/conversations/${conversation.id}/notify`)
       .send({ text: "a real reply", sender: "Gemini" });
     expect(normal.body.message.thinking).toBeUndefined();
+  });
+
+  it("POST /conversations/:id/notify records context:true under the app's own sender (issue #286)", async () => {
+    await deps.store.save(validSubscription);
+    const conversation = await deps.conversations.create("Test", "");
+    const ctx = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "<memory>", sender: "Lyceum", context: true, push: false });
+    expect(ctx.status).toBe(200);
+    expect(ctx.body.message.context).toBe(true);
+    expect(ctx.body.message.sender).toBe("Lyceum");
+
+    const normal = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "a real reply", sender: "Gemini", push: false });
+    expect(normal.body.message.context).toBeUndefined();
+
+    const both = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "x", sender: "Lyceum", context: true, system: true });
+    expect(both.status).toBe(400);
   });
 });
 
