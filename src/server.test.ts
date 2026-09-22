@@ -2538,6 +2538,14 @@ describe("agora internal app", () => {
       .post(`/conversations/${conversation.id}/notify`)
       .send({ text: "x", sender: "Lyceum", context: true, system: true });
     expect(both.status).toBe(400);
+
+    const asOwner = await request(app)
+      .post(`/conversations/${conversation.id}/notify`)
+      .send({ text: "x", sender: "Edvard", context: true, push: false });
+    expect(asOwner.status).toBe(400);
+    expect(asOwner.body.error).toMatch(/as Edvard/);
+    const stored = await deps.conversations.get(conversation.id);
+    expect(stored!.messages.map((m) => m.sender)).not.toContain("Edvard");
   });
 });
 
