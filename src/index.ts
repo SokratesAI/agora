@@ -99,6 +99,16 @@ const servers = [
     logger.info({ port: config.internalPort }, "agora internal listener up (agent surface)");
   }),
 ];
+// The same Express app on a second port, not a second app, so the two can
+// never serve different routes. Issue #287's guard on :8080 will tell them
+// apart by the port a request arrived on (req.socket.localPort).
+if (config.tailnetPort) {
+  servers.push(
+    publicApp.listen(config.tailnetPort, () => {
+      logger.info({ port: config.tailnetPort }, "agora tailnet listener up (public app, Tailscale proxy only)");
+    }),
+  );
+}
 
 function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");

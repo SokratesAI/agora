@@ -37,6 +37,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     port: 8080,
     internalPort: 8081,
+    tailnetPort: 8085,
     dataDir: "/tmp/unused",
     vapidPublicKey: "test-public-key",
     vapidPrivateKey: "test-private-key",

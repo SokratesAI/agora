@@ -40,3 +40,13 @@ describe("default VAPID subject", () => {
     expect(config.vapidSubject).toBe("mailto:ops@example.com");
   });
 });
+
+describe("tailnet listener port", () => {
+  it("defaults to 8085", () => {
+    expect(loadConfig({}).tailnetPort).toBe(8085);
+  });
+
+  it("is 0, which turns the listener off, when TAILNET_PORT=0", () => {
+    expect(loadConfig({ TAILNET_PORT: "0" }).tailnetPort).toBe(0);
+  });
+});
