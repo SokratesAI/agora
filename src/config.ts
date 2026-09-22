@@ -3,6 +3,12 @@ import { parseQuietHours, type QuietHours } from "./push/quiet-hours.js";
 export interface Config {
   port: number;
   internalPort: number;
+  /** Second listener for the same public app, meant to be reachable only from
+   * the Tailscale proxy (a NetworkPolicy names this port for the tailscale
+   * namespace and nothing else). Issue #287: once his browser reaches Agora
+   * through this port, :8080 can refuse a request with no agent token without
+   * locking him out. 0 turns the listener off. */
+  tailnetPort: number;
   dataDir: string;
   vapidPublicKey: string | undefined;
   vapidPrivateKey: string | undefined;
@@ -33,6 +39,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: Number(env.PORT ?? 8080),
     internalPort: Number(env.INTERNAL_PORT ?? 8081),
+    tailnetPort: Number(env.TAILNET_PORT ?? 8085),
     dataDir: env.DATA_DIR ?? "/data",
     vapidPublicKey: env.VAPID_PUBLIC_KEY,
     vapidPrivateKey: env.VAPID_PRIVATE_KEY,
