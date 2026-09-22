@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_VAPID_SUBJECT, loadConfig } from "./config.js";
+import { DEFAULT_VAPID_SUBJECT, loadConfig, parseAppTokens } from "./config.js";
 
 // This repository is public. Anything hardcoded as a fallback here is
 // readable by anyone and stays in the git history forever, so the defaults
@@ -48,5 +48,24 @@ describe("tailnet listener port", () => {
 
   it("is 0, which turns the listener off, when TAILNET_PORT=0", () => {
     expect(loadConfig({ TAILNET_PORT: "0" }).tailnetPort).toBe(0);
+  });
+});
+
+describe("parseAppTokens (issue #286)", () => {
+  it("maps each token to the one app it speaks as", () => {
+    expect(parseAppTokens(undefined).size).toBe(0);
+    expect(parseAppTokens("  ").size).toBe(0);
+    const tokens = parseAppTokens('{"Lyceum":"a","Marcus":"b"}');
+    expect(tokens.get("a")).toBe("Lyceum");
+    expect(tokens.get("b")).toBe("Marcus");
+    expect(loadConfig({ AGORA_APP_TOKENS: '{"Lyceum":"a"}' }).appTokens.get("a")).toBe("Lyceum");
+  });
+
+  it("refuses a value that would give a half-working guard", () => {
+    expect(() => parseAppTokens("not json")).toThrow();
+    expect(() => parseAppTokens('["a"]')).toThrow(/JSON object/);
+    expect(() => parseAppTokens('{"Lyceum":""}')).toThrow(/non-empty/);
+    expect(() => parseAppTokens('{"Lyceum":1}')).toThrow(/non-empty/);
+    expect(() => parseAppTokens('{"Lyceum":"a","Marcus":"a"}')).toThrow(/shares a token/);
   });
 });

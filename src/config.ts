@@ -19,6 +19,11 @@ export interface Config {
   /** Shared agent token (ADR 0007). Unset → internal app stays open (logged
    * as a warning at startup) so a missing secret can't wedge a deploy. */
   agentToken: string | undefined;
+  /** Per-app tokens (issue #286), token -> the one app name that token may
+   * speak as. An app token reaches only the routes an app needs and cannot
+   * choose its own sender. Read from AGORA_APP_TOKENS, a JSON object of
+   * `{"<app name>": "<token>"}`; unset or empty means no app tokens. */
+  appTokens: Map<string, string>;
   /** Window in which a notification is recorded but not pushed to the phone.
    * Defaults to the configured overnight hours; set QUIET_HOURS_START to an
    * empty string to turn it off entirely. */
@@ -46,10 +51,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vapidSubject: env.VAPID_SUBJECT ?? DEFAULT_VAPID_SUBJECT,
     runnerUrl: env.RUNNER_URL,
     agentToken: env.AGORA_AGENT_TOKEN,
+    appTokens: parseAppTokens(env.AGORA_APP_TOKENS),
     quietHours: parseQuietHours(
       env.QUIET_HOURS_START ?? "22:00",
       env.QUIET_HOURS_END ?? "07:00",
     ),
     quietHoursTimeZone: env.QUIET_HOURS_TZ ?? "Europe/Oslo",
   };
+}
+
+/** Parse AGORA_APP_TOKENS (`{"Lyceum": "<token>"}`) into token -> app name.
+ * Refuses a malformed value, an empty name or token, and a token equal to
+ * another app's, rather than starting with a guard that half-works. */
+export function parseAppTokens(raw: string | undefined): Map<string, string> {
+  const tokens = new Map<string, string>();
+  if (raw === undefined || raw.trim() === "") return tokens;
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("AGORA_APP_TOKENS must be a JSON object of app name -> token");
+  }
+  for (const [app, token] of Object.entries(parsed)) {
+    if (app === "" || typeof token !== "string" || token === "") {
+      throw new Error(`AGORA_APP_TOKENS: app "${app}" needs a non-empty token`);
+    }
+    if (tokens.has(token)) {
+      throw new Error(`AGORA_APP_TOKENS: "${app}" shares a token with "${tokens.get(token)}"`);
+    }
+    tokens.set(token, app);
+  }
+  return tokens;
 }

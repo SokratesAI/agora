@@ -44,6 +44,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     vapidSubject: "mailto:test@example.com",
     runnerUrl: undefined,
     agentToken: undefined,
+    appTokens: new Map(),
     quietHours: undefined,
     quietHoursTimeZone: "Europe/Oslo",
     ...overrides,
@@ -1799,6 +1800,49 @@ describe("agora internal app", () => {
     expect(
       (await request(guarded).get("/heartbeats").set("x-agora-token", "s3cret")).status,
     ).toBe(200);
+  });
+
+  it("an app token reaches only its two routes and speaks only as its app (issue #286)", async () => {
+    const guarded = createInternalApp({
+      ...deps,
+      config: makeConfig({ agentToken: "s3cret", appTokens: new Map([["lyc-token", "Lyceum"]]) }),
+    });
+    const persona = await deps.personas.create({ name: "Aristoteles", model: "anthropic:claude-sonnet-5" });
+    const asApp = (r: request.Test) => r.set("x-agora-token", "lyc-token");
+
+    // Everything outside the app routes is closed to it, reads included.
+    expect((await asApp(request(guarded).get("/heartbeats"))).status).toBe(403);
+    expect((await asApp(request(guarded).get(`/personas/${persona.id}`))).status).toBe(403);
+    expect(
+      (await asApp(request(guarded).patch(`/personas/${persona.id}`)).send({ sharedMemory: "x" })).status,
+    ).toBe(403);
+    expect((await deps.personas.get(persona.id))?.sharedMemory ?? "").toBe("");
+
+    const created = await asApp(request(guarded).post("/conversations")).send({
+      name: "Lyceum · test", personaId: persona.id,
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.conversation.id as string;
+    const notify = (body: object) => asApp(request(guarded).post(`/conversations/${id}/notify`)).send(body);
+
+    expect((await notify({ text: "ctx", sender: "Lyceum", context: true, push: false })).status).toBe(200);
+    // His own typed words, relayed: a persona answers only his turns.
+    expect((await notify({ text: "hei", sender: "Edvard", push: false })).status).toBe(200);
+    expect((await notify({ text: "ctx", sender: "Edvard", context: true, push: false })).status).toBe(400);
+    for (const sender of ["Aristoteles", "Nova", undefined]) {
+      const res = await notify({ text: "x", sender, push: false });
+      expect(res.status).toBe(403);
+    }
+    const stored = await deps.conversations.get(id);
+    expect(stored!.messages.map((m) => m.sender)).toEqual(["Lyceum", "Edvard"]);
+
+    // The shared agent token is unchanged: any sender, any route.
+    const master = await request(guarded)
+      .post(`/conversations/${id}/notify`).set("x-agora-token", "s3cret")
+      .send({ text: "reply", sender: "Aristoteles", push: false });
+    expect(master.status).toBe(200);
+    expect((await request(guarded).get("/heartbeats").set("x-agora-token", "s3cret")).status).toBe(200);
+    expect((await request(guarded).get("/heartbeats").set("x-agora-token", "nope")).status).toBe(401);
   });
 
   it("stays open when no token is configured (deploy-order safety)", async () => {
