@@ -1,4 +1,4 @@
-import express, { type Express, type RequestHandler } from "express";
+import express, { type Express, type Request, type RequestHandler } from "express";
 import compression from "compression";
 import multer from "multer";
 import type pino from "pino";
@@ -730,6 +730,18 @@ function registerUpdateConversationRoute(app: Express, deps: ServerDeps): void {
  * network boundary is the trust boundary, same as everywhere else on this
  * platform (agent-facing writes live on the internal app, ADR 0007).
  */
+/** The user-agent a public-app request is counted under. A request that
+ * reached the main port (:8080) without a known token is tagged, so
+ * /route-usage names every caller issue #287's lock on that port would
+ * refuse; the tailnet port and token holders are counted as before. */
+export function usageAgent(req: Request, config: Pick<Config, "port" | "agentToken" | "appTokens">): string | undefined {
+  const agent = req.get("user-agent");
+  if (req.socket.localPort !== config.port) return agent;
+  const token = req.header("x-agora-token");
+  if (token && (token === config.agentToken || config.appTokens.has(token))) return agent;
+  return `[:${config.port} no token] ${agent ?? "(no user-agent)"}`;
+}
+
 export function createPublicApp(deps: ServerDeps): Express {
   const { config, store, conversations, personas, heartbeats, workflows, audit, attachments, logger, routeUsage } = deps;
   const app = express();
@@ -772,7 +784,7 @@ export function createPublicApp(deps: ServerDeps): Express {
           req.method,
           typeof template === "string" ? template : undefined,
           req.path,
-          req.get("user-agent"),
+          usageAgent(req, config),
           res.statusCode,
         );
       });
