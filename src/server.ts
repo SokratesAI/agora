@@ -1771,6 +1771,13 @@ export function createInternalApp(deps: ServerDeps): Express {
       res.status(400).json({ error: "a context message cannot also be system or thinking" });
       return;
     }
+    // Context is by definition not from Edvard: Agora would label it
+    // "[context from Edvard, not from Edvard]" while the runner reads any
+    // message under his name as his own turn, so the two halves disagree.
+    if (context === true && speaker === "Edvard") {
+      res.status(400).json({ error: "a context message cannot be sent as Edvard" });
+      return;
+    }
     const message = await conversations.appendMessage(
       conversation.id, speaker, text, undefined, undefined, system === true, undefined, thinking === true,
       options as string[] | undefined, context === true,
