@@ -1472,6 +1472,14 @@ export const INTERNAL_HEARTBEAT_FIELDS: Record<string, "string" | "boolean"> = {
  */
 export const INTERNAL_HEARTBEAT_PRECONDITIONS = ["ifLastRunAt"] as const;
 
+/** The routes an app token (issue #286) may reach on the internal app:
+ * open a conversation and post into one. Everything else -- personas,
+ * heartbeats, workflows, memory -- stays behind the shared agent token. */
+export function isAppRoute(method: string, path: string): boolean {
+  if (method !== "POST") return false;
+  return path === "/conversations" || /^\/conversations\/[^/]+\/notify$/.test(path);
+}
+
 /**
  * Internal app (:8081): the agent surface. Guarded by the shared
  * x-agora-token (ADR 0007) when configured — the network boundary keeps it
@@ -1490,11 +1498,24 @@ export function createInternalApp(deps: ServerDeps): Express {
       next();
       return;
     }
-    if (req.header("x-agora-token") !== config.agentToken) {
-      res.status(401).json({ error: "invalid agent token" });
+    const token = req.header("x-agora-token");
+    if (token === config.agentToken) {
+      next();
       return;
     }
-    next();
+    // An app token (issue #286) opens only what an app needs, and the name
+    // it may speak as is fixed here rather than taken from the body.
+    const appName = token ? config.appTokens.get(token) : undefined;
+    if (appName !== undefined) {
+      if (!isAppRoute(req.method, req.path)) {
+        res.status(403).json({ error: `the ${appName} token cannot use ${req.method} ${req.path}` });
+        return;
+      }
+      res.locals.appName = appName;
+      next();
+      return;
+    }
+    res.status(401).json({ error: "invalid agent token" });
   };
   app.use(tokenGuard);
 
@@ -1776,6 +1797,14 @@ export function createInternalApp(deps: ServerDeps): Express {
     // message under his name as his own turn, so the two halves disagree.
     if (context === true && speaker === "Edvard") {
       res.status(400).json({ error: "a context message cannot be sent as Edvard" });
+      return;
+    }
+    // An app speaks as itself. The one other name it may use is Edvard's, for
+    // the words he typed into the app, because a persona answers only his
+    // turns; the check above already keeps its context off his name.
+    const appName = res.locals.appName as string | undefined;
+    if (appName !== undefined && speaker !== appName && speaker !== "Edvard") {
+      res.status(403).json({ error: `the ${appName} token can only post as ${appName} or relay Edvard` });
       return;
     }
     const message = await conversations.appendMessage(
