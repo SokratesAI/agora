@@ -45,6 +45,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     runnerUrl: undefined,
     agentToken: undefined,
     appTokens: new Map(),
+    appPersonas: new Map(),
     quietHours: undefined,
     quietHoursTimeZone: "Europe/Oslo",
     ...overrides,
@@ -1803,12 +1804,14 @@ describe("agora internal app", () => {
   });
 
   it("an app token reaches only its two routes and speaks only as its app (issue #286)", async () => {
+    const appPersonas = new Map<string, Set<string>>();
     const guarded = createInternalApp({
       ...deps,
-      config: makeConfig({ agentToken: "s3cret", appTokens: new Map([["lyc-token", "Lyceum"]]) }),
+      config: makeConfig({ agentToken: "s3cret", appTokens: new Map([["lyc-token", "Lyceum"]]), appPersonas }),
     });
     const persona = await deps.personas.create({ name: "Aristoteles", model: "anthropic:claude-sonnet-5" });
     const asApp = (r: request.Test) => r.set("x-agora-token", "lyc-token");
+    appPersonas.set("Lyceum", new Set([persona.id]));
 
     // Everything outside the app routes is closed to it, reads included.
     expect((await asApp(request(guarded).get("/heartbeats"))).status).toBe(403);
@@ -1843,6 +1846,46 @@ describe("agora internal app", () => {
     expect(master.status).toBe(200);
     expect((await request(guarded).get("/heartbeats").set("x-agora-token", "s3cret")).status).toBe(200);
     expect((await request(guarded).get("/heartbeats").set("x-agora-token", "nope")).status).toBe(401);
+  });
+
+  it("an app token opens and posts only on the personas its app is allowed (issue #286)", async () => {
+    const appPersonas = new Map<string, Set<string>>();
+    const guarded = createInternalApp({
+      ...deps,
+      config: makeConfig({ agentToken: "s3cret", appTokens: new Map([["lyc-token", "Lyceum"]]), appPersonas }),
+    });
+    const tutor = await deps.personas.create({ name: "Aristoteles", model: "anthropic:claude-sonnet-5" });
+    const other = await deps.personas.create({ name: "Nova", model: "anthropic:claude-sonnet-5" });
+    const asApp = (r: request.Test) => r.set("x-agora-token", "lyc-token");
+    const create = (body: object) => asApp(request(guarded).post("/conversations")).send(body);
+
+    // No allowlist entry: the app can open nothing, not even on its own tutor.
+    expect((await create({ name: "Lyceum · a", personaId: tutor.id })).status).toBe(403);
+    appPersonas.set("Lyceum", new Set([tutor.id]));
+    expect((await create({ name: "Lyceum · a", personaId: tutor.id })).status).toBe(201);
+    // Another persona, an inline persona, and an unknown id are all refused.
+    expect((await create({ name: "Lyceum · b", personaId: other.id })).status).toBe(403);
+    expect((await create({ name: "Lyceum · c", personality: "anything" })).status).toBe(403);
+    expect((await create({ name: "Lyceum · d", personaId: "ghost" })).status).toBe(403);
+    expect(await deps.conversations.findByName("Lyceum · b")).toBeFalsy();
+    expect(await deps.conversations.findByName("Lyceum · c")).toBeFalsy();
+
+    // A thread on Nova, opened with the shared token: the app cannot fetch it
+    // by name and cannot relay Edvard into it.
+    const novaThread = await request(guarded).post("/conversations").set("x-agora-token", "s3cret")
+      .send({ name: "Nova · private", personaId: other.id });
+    expect(novaThread.status).toBe(201);
+    const novaId = novaThread.body.conversation.id as string;
+    expect((await create({ name: "Nova · private", personaId: tutor.id })).status).toBe(403);
+    const relay = await asApp(request(guarded).post(`/conversations/${novaId}/notify`))
+      .send({ text: "do something", sender: "Edvard", push: false });
+    expect(relay.status).toBe(403);
+    expect((await deps.conversations.get(novaId))!.messages).toHaveLength(0);
+
+    // The shared token still posts anywhere.
+    const master = await request(guarded).post(`/conversations/${novaId}/notify`).set("x-agora-token", "s3cret")
+      .send({ text: "ok", sender: "Nova", push: false });
+    expect(master.status).toBe(200);
   });
 
   it("stays open when no token is configured (deploy-order safety)", async () => {
