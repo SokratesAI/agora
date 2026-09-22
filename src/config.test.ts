@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_VAPID_SUBJECT, loadConfig, parseAppTokens } from "./config.js";
+import { DEFAULT_VAPID_SUBJECT, loadConfig, parseAppPersonas, parseAppTokens } from "./config.js";
 
 // This repository is public. Anything hardcoded as a fallback here is
 // readable by anyone and stays in the git history forever, so the defaults
@@ -67,5 +67,19 @@ describe("parseAppTokens (issue #286)", () => {
     expect(() => parseAppTokens('{"Lyceum":""}')).toThrow(/non-empty/);
     expect(() => parseAppTokens('{"Lyceum":1}')).toThrow(/non-empty/);
     expect(() => parseAppTokens('{"Lyceum":"a","Marcus":"a"}')).toThrow(/shares a token/);
+  });
+});
+
+describe("parseAppPersonas (issue #286)", () => {
+  it("reads app -> persona ids and refuses anything malformed", () => {
+    expect(parseAppPersonas(undefined).size).toBe(0);
+    expect(parseAppPersonas(" ").size).toBe(0);
+    expect([...parseAppPersonas('{"Lyceum":["p1","p2"]}').get("Lyceum")!]).toEqual(["p1", "p2"]);
+    expect(loadConfig({ AGORA_APP_PERSONAS: '{"Lyceum":["p1"]}' }).appPersonas.get("Lyceum")?.has("p1")).toBe(true);
+    expect(() => parseAppPersonas("nope")).toThrow();
+    expect(() => parseAppPersonas('["p1"]')).toThrow(/JSON object/);
+    expect(() => parseAppPersonas('{"Lyceum":"p1"}')).toThrow(/non-empty persona ids/);
+    expect(() => parseAppPersonas('{"Lyceum":[""]}')).toThrow(/non-empty persona ids/);
+    expect(() => parseAppPersonas('{"Lyceum":[1]}')).toThrow(/non-empty persona ids/);
   });
 });

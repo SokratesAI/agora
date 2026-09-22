@@ -537,12 +537,23 @@ function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
       res.status(400).json({ error: "name is required" });
       return;
     }
+    // An app token (issue #286) opens a thread only on a persona its app is
+    // allowed, and never creates a persona inline.
+    const appName = res.locals.appName as string | undefined;
+    if (appName !== undefined && !appMayUse(deps.config, appName, [personaId])) {
+      res.status(403).json({ error: `the ${appName} token cannot open a thread on that persona` });
+      return;
+    }
     if (model !== undefined && !VALID_MODEL_IDS.has(model as string)) {
       res.status(400).json({ error: "unknown model" });
       return;
     }
     const existing = await deps.conversations.findByName(name);
     if (existing) {
+      if (appName !== undefined && !appMayUse(deps.config, appName, (existing.personas ?? []).map((p) => p.personaId))) {
+        res.status(403).json({ error: `the ${appName} token cannot use that conversation` });
+        return;
+      }
       res.status(200).json({ status: "exists", conversation: await enrichConversation(existing, deps.personas) });
       return;
     }
@@ -580,6 +591,17 @@ function registerCreateConversationRoute(app: Express, deps: ServerDeps): void {
  * apps for the same reason the conversation create/update routes are: the
  * drawer needs them, and the runner files each cycle's conversation into a
  * folder over the internal app. */
+/** True when every persona id is one the app's allowlist names (issue #286).
+ * No ids, a non-string id or an app with no allowlist all answer false. */
+function appMayUse(config: Config, appName: string, personaIds: unknown[]): boolean {
+  const allowed = config.appPersonas.get(appName);
+  return (
+    allowed !== undefined &&
+    personaIds.length > 0 &&
+    personaIds.every((id) => typeof id === "string" && allowed.has(id))
+  );
+}
+
 function registerFolderRoutes(app: Express, deps: ServerDeps): void {
   app.get("/folders", async (_req, res) => {
     res.status(200).json({ folders: await deps.folders.list() });
@@ -1805,6 +1827,12 @@ export function createInternalApp(deps: ServerDeps): Express {
     const appName = res.locals.appName as string | undefined;
     if (appName !== undefined && speaker !== appName && speaker !== "Edvard") {
       res.status(403).json({ error: `the ${appName} token can only post as ${appName} or relay Edvard` });
+      return;
+    }
+    // ...and only into a thread on a persona its app is allowed, so relaying
+    // Edvard cannot reach any other persona's conversation.
+    if (appName !== undefined && !appMayUse(config, appName, (conversation.personas ?? []).map((p) => p.personaId))) {
+      res.status(403).json({ error: `the ${appName} token cannot post in that conversation` });
       return;
     }
     const message = await conversations.appendMessage(

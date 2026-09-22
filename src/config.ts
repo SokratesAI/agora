@@ -24,6 +24,11 @@ export interface Config {
    * choose its own sender. Read from AGORA_APP_TOKENS, a JSON object of
    * `{"<app name>": "<token>"}`; unset or empty means no app tokens. */
   appTokens: Map<string, string>;
+  /** Per-app persona allowlist (issue #286), app name -> the persona ids its
+   * token may open a thread on and post into. Read from AGORA_APP_PERSONAS,
+   * `{"<app name>": ["<persona id>", ...]}`. An app with no entry may open
+   * and post into nothing, so a token cannot reach a persona by default. */
+  appPersonas: Map<string, Set<string>>;
   /** Window in which a notification is recorded but not pushed to the phone.
    * Defaults to the configured overnight hours; set QUIET_HOURS_START to an
    * empty string to turn it off entirely. */
@@ -52,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerUrl: env.RUNNER_URL,
     agentToken: env.AGORA_AGENT_TOKEN,
     appTokens: parseAppTokens(env.AGORA_APP_TOKENS),
+    appPersonas: parseAppPersonas(env.AGORA_APP_PERSONAS),
     quietHours: parseQuietHours(
       env.QUIET_HOURS_START ?? "22:00",
       env.QUIET_HOURS_END ?? "07:00",
@@ -80,4 +86,23 @@ export function parseAppTokens(raw: string | undefined): Map<string, string> {
     tokens.set(token, app);
   }
   return tokens;
+}
+
+/** Parse AGORA_APP_PERSONAS (`{"Lyceum": ["<persona id>"]}`) into app name ->
+ * allowed persona ids. Refuses anything malformed rather than starting with an
+ * allowlist that silently allows less, or more, than was written. */
+export function parseAppPersonas(raw: string | undefined): Map<string, Set<string>> {
+  const personas = new Map<string, Set<string>>();
+  if (raw === undefined || raw.trim() === "") return personas;
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("AGORA_APP_PERSONAS must be a JSON object of app name -> persona ids");
+  }
+  for (const [app, ids] of Object.entries(parsed)) {
+    if (app === "" || !Array.isArray(ids) || ids.some((id) => typeof id !== "string" || id === "")) {
+      throw new Error(`AGORA_APP_PERSONAS: app "${app}" needs a list of non-empty persona ids`);
+    }
+    personas.set(app, new Set(ids as string[]));
+  }
+  return personas;
 }
